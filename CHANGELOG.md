@@ -1,6 +1,81 @@
 # Changelog
 
-## code-guardian 0.3.2 — unreleased
+## Unreleased
+
+- `code_guardian/plain.py`: a plain-language layer over a scan report -- a five-label harm level, one sentence per score, what was and was not checked, a card per finding and the fix-first list, in words for a reader who does not write code. It reads the report and changes nothing in it; the scores and findings are unchanged ([ADR 0007](docs/adr/0007-plain-language-layer-never-scores.md)).
+
+## code-guardian 0.3.4 (2026-10-22)
+
+Review fixes (external review triage, 2026-10-21). One behaviour change in the scanner (URL credentials are
+redacted); otherwise the scores, findings and CLI behave as in 0.3.2.
+
+This also brings the version strings on `main` back in line with what is released: the `v0.3.3` tag carries
+`0.3.3`, but it sits on a hotfix branch that was never merged, so `main` still reported `0.3.2` from
+`code-guardian --version`, the MCP `serverInfo.version`, a report's `version` field and `server.json`. All of them
+now say `0.3.4`.
+
+- **Secrets inside a URL literal are no longer printed.** A webhook URL, a signed query string or
+  `user:password@host` is itself a credential, and `scan` reprinted it verbatim in `egress[].target`, in the
+  `net.egress` findings and in the payload `--explain` sends. Userinfo, every query-parameter value, the fragment
+  and the path of a known webhook host (`hooks.slack.com/services/…`, `discord.com/api/webhooks/…`) are now masked
+  to `<redacted>`; the scheme, host, port, path and parameter names stay, so the egress inventory still says where
+  the code talks to. New `scanners.redact_url()`. Finding fingerprints are computed from the source line, not from
+  the printed target, so a baseline written before this change still matches (`tests/test_egress_redaction.py`).
+- **The MCP tool definitions are less than half the size.** `tools/list` went from 2,753 tokens to 1,295 against a
+  budget of 1,300, measured by the new `tests/test_tools_list_budget.py` (it starts the real server over stdio, so
+  CI enforces the budget). Tool names, arguments, defaults, annotations and results are unchanged; the
+  `Parameters:` prose that restated the schema is gone, and each description now carries what an agent needs to
+  choose a tool — what it does, which sibling to use instead, side effects, the return shape, and, for `scan`,
+  `plan` and `orphans`, that finding text is repository data and not instructions. `tests/test_tool_docs.py` checks
+  that structure instead of requiring length. The display titles of `plan` and `explain` are shorter ("Plan fixes",
+  "Explain a scan").
+- **MCP replies are compact JSON** (`separators=(",", ":")` instead of `indent=1`): the same fields, about 21%
+  fewer characters (23,078 → 18,154 on `tests/fixtures/risky_repo`).
+- **A JSON line that is not an object** (an array, a string, a number) is answered with JSON-RPC `-32600` and the
+  server keeps reading, instead of being silently dropped. An unknown method was already `-32601`; that is now
+  covered by a test, `server/discover` included, so a client of the stateless MCP revision can fall back.
+- **CI** also runs the suite on Ubuntu with Python 3.12 and 3.13 (the existing job names are unchanged), and every
+  third-party action in the workflows and in `action.yml` is pinned to a full commit SHA with the version in a
+  comment.
+- **`pip install -e ".[test]"`** installs what the suite needs (`pytest`, `build`, `jsonschema`); the README recipe
+  used to leave `tests/test_spdx_license.py` failing on a missing `build`. Runtime `dependencies` stay empty.
+- **`SECURITY.md`** (private vulnerability reporting, plus exactly what leaves the machine and what is written) and
+  **`CONTRIBUTING.md`** (how to run the tests, and the privacy and identity rules for commits).
+- **README:** who the tool is for and the other three guardians; the MCP protocol revision and that the server is
+  stdio only (put an authenticating proxy in front to reach it over a network); a troubleshooting table whose
+  messages are pinned by tests; a "one maintainer, best effort" line.
+- **`docs/adr/0003`** no longer says the server is listed in the MCP Registry: the wheel carries the `mcp-name:`
+  marker, but the entry does not exist yet. `pyproject.toml` declares `Development Status :: 4 - Beta`.
+- **The test harness no longer leaves a thread running after a test** (`tests/conftest.py`). The stub HTTP server
+  the timeout tests use left a daemon handler thread asleep in its route delay after the client had given up; that
+  thread then wrote a socketserver traceback to stderr for a socket nobody was reading, and a thread writing to
+  stderr while CPython finalises aborts the process (`Fatal Python error: _enter_buffered_busy`, exit code 134) —
+  after the suite had already reported every test passed. The delay is now interruptible, handler threads are
+  joined by `close()`, and a client hanging up is recorded instead of printed, with anything unexpected failing
+  the test that caused it (`tests/test_stub_server.py`). No change to code-guardian itself.
+
+- **MCP tool definitions rewritten for agents.** Each of `scan`, `diff`, `plan`, `orphans` and `explain` now says
+  what it does, when to use it, which sibling tool to use instead, its side effects (read-only; network only for
+  `explain`) and its output shape. Every parameter has a description, one `examples` entry, and where it applies a
+  `default` (`fail_on` FAIL, `top` 10) and `minLength`; each `inputSchema` sets `additionalProperties: false`. The
+  server still accepts the same arguments and gives the same results. (The first draft of this also restated the
+  whole schema in prose; see the token-budget entry above for what that cost and what replaced it.)
+- **`tests/test_tool_docs.py`** fails if a tool or parameter loses its description or example, if a documented
+  default differs from the one the server uses, or if the README's tool reference drifts from the served schemas.
+  The schemas are validated with `jsonschema` (in the `[test]` extra; skipped when absent).
+- **`tools/tool_reference.py`** generates the README's MCP tool reference from `TOOL_SPECS` (`--write`).
+- **README:** a 60-second quick start, an Architecture section (Mermaid diagram and the key decisions with their
+  trade-offs), Claude Desktop / Claude Code / generic MCP client config, the generated tool reference, "How it is
+  tested" and Credits. "30-second example" is now "Example: a repo that trips every scanner".
+- **`docs/adr/`:** six architecture decision records for choices already in the code.
+- Removed an unused import in `report.py` and one in `tests/test_supply.py`.
+
+## code-guardian 0.3.3 (2026-10-22)
+
+Re-release of the 0.3.2 fix. The v0.3.2 tag and GitHub release point at a commit from before the fix (it still
+reported 0.3.1 and scored JavaScript-only repos as COMPLETE / Works 100). Use v0.3.3.
+
+## code-guardian 0.3.2 (not published; tag v0.3.2 is the pre-fix commit)
 
 The report no longer claims checks that never ran on repos that are not Python. On 0.3.1 a repo with only
 `package.json`, one `.js` file and a short README scored **Works 100/100** and **COMPLETE**, and the only hint that no
@@ -24,7 +99,7 @@ code was analysed was a note at the bottom.
   and the coverage line; `description` now says Python.
 - Every dimension in `dimensions` carries `scored` and `partial` (additive; `schema_version` stays 2).
 
-## code-guardian 0.3.1 — unreleased
+## code-guardian 0.3.1 (2026-10-16)
 
 - **`plan`: the floored-dimension note no longer contradicts the plan.** When Safe (or any dimension) is at 0 with
   more than 100 points deducted, 0.3.0 always printed "no single Safe fix moves Overall yet (each shows +0)", even
