@@ -19,6 +19,10 @@ Public contract:
     fix_first(report, top=10) -> [{"rank", "title", "level", "count", "gain", "grade_after", "first_location",
                                    "how"}]
     fix_first_notes(report, top=10) -> [str]        # verify.plan(...)["notes"], unchanged
+    fix_first_lead(report) -> str | None            # one plain sentence shown above those notes
+    diff_sentence(d) -> str                         # d: verify.diff(...); "1 fixed, 0 new, grade D \u2192 B"
+    file_rows(report, inventory) -> [{"rel", "kind", "why_not_read", "why_partly", "findings", "risk"}]
+    file_counts(rows) -> {"all", "with_findings", "no_known_risks", "partly_checked", "not_read"}
 
 CLI:
     python -m code_guardian.plain --selftest        # counted checks; rc 0 only if all pass
@@ -39,6 +43,9 @@ LOW = "Low"
 NONE_FOUND = "No known risks found"
 COULD_NOT_CHECK = "Could not check"
 LABELS = (HIGH, MEDIUM, LOW, NONE_FOUND, COULD_NOT_CHECK)
+PARTLY_CHECKED = "Partly checked"  # file labels (file_rows); the first four of LABELS are also file labels
+NOT_READ = "Not read"
+FILE_RISKS = (HIGH, MEDIUM, LOW, NONE_FOUND, PARTLY_CHECKED, NOT_READ)
 
 # Words that would promise more than a static scan can know. Single words match as whole words, phrases as written;
 # "Safe" as the name of the score dimension is not one of them.
@@ -325,6 +332,8 @@ def _behind(rows):
 
 
 def _incomplete_clause(rep):
+    """Said once, on the Overall sentence: the page's banner already leads with it, so repeating it on Safe, Works
+    and Complete as well only adds noise."""
     return _PARTIAL_CLAUSE if rep.get("status") in ("PARTIAL", "INVALID") else ""
 
 
@@ -341,8 +350,7 @@ def score_sentence(dimension, rep):
         reason = _coverage(rep).get("reason") or "the check could not run on this project"
         return "%s is not scored for this project, because %s." % (DIMENSION_LABEL[dimension], reason)
     rows = _rows(rep, dimension)
-    return "%s scores %d out of 100: %s (%s)%s." % (DIMENSION_LABEL[dimension], value, _band(value), _behind(rows),
-                                                    _incomplete_clause(rep))
+    return "%s scores %d out of 100: %s (%s)." % (DIMENSION_LABEL[dimension], value, _band(value), _behind(rows))
 
 
 def _overall_sentence(rep, scores):
@@ -352,12 +360,15 @@ def _overall_sentence(rep, scores):
         return "Overall is not graded: %s." % tail
     rows = [r for name in score.DIMENSIONS for r in _rows(rep, name)]
     value = scores.get("overall")
-    return "Overall %s (%s/100): %s (%s)%s%s." % (scores.get("grade"), value, _band(value), _behind(rows),
-                                                  _cap_clause(scores), _incomplete_clause(rep))
+    cap = _cap_clause(scores)
+    # When the cap reason already says the scan is PARTIAL, the clause would say it a second time.
+    incomplete = "" if "PARTIAL" in cap else _incomplete_clause(rep)
+    return "Overall %s (%s/100): %s (%s)%s%s." % (scores.get("grade"), value, _band(value), _behind(rows), cap,
+                                                  incomplete)
 
 
 def _cap_clause(scores):
-    """", capped at D: <cap_reason>" -- the reason verbatim from the report, the letter read back out of it."""
+    """", capped at D: <cap_reason>": the reason verbatim from the report, the letter read back out of it."""
     reason = scores.get("cap_reason")
     if not scores.get("capped") or not reason:
         return ""
@@ -374,6 +385,8 @@ def _cap_clause(scores):
 PYTHON_TEXT = "every Safe and Works check ran on these"
 PYTHON_TEXT_PARTIAL = "the Safe and Works checks ran on these, except where the first line says otherwise"
 PYTHON_TEXT_CRASHED = "the Safe and Works checks ran on these, except where a check did not finish"
+# With no Python file there is nothing for those checks to run on, so the line says that and claims nothing ran.
+PYTHON_TEXT_NONE = "there was no Python here for the Safe and Works checks to read"
 OTHER_TEXT = ("read for key shapes, and where the file is a manifest for install hooks and pins; the code itself "
               "was not analysed")
 # Measured, not quoted: a skipped file is never opened. walk.py puts a file in files.skipped when it is binary, a
@@ -400,23 +413,25 @@ def checked_lines(rep):
     # The files that did not parse get their own entry below; they are not files every check ran on.
     python = max(0, int(cov.get("python") or 0) - unparsed)
     out.append({"label": "Python", "files": python, "depth": "full",
-                "text": "Python: %s -- %s." % (_plural(python, "file"), _python_text(rep, leads))})
+                "text": "Python: %s \u2014 %s." % (_plural(python, "file"), _python_text(rep, leads, python))})
     for ext, count in sorted((cov.get("other_source") or {}).items()):
         label = LANGUAGES.get(ext, ext)
         out.append({"label": label, "files": int(count), "depth": "secrets+manifests",
-                    "text": "%s: %s -- %s." % (label, _plural(int(count), "file"), OTHER_TEXT)})
+                    "text": "%s: %s \u2014 %s." % (label, _plural(int(count), "file"), OTHER_TEXT)})
     skipped = int(files.get("skipped") or 0)
     if skipped:
         out.append({"label": "Skipped", "files": skipped, "depth": "not read",
-                    "text": "Skipped: %s -- %s." % (_plural(skipped, "file"), SKIPPED_TEXT)})
+                    "text": "Skipped: %s \u2014 %s." % (_plural(skipped, "file"), SKIPPED_TEXT)})
     if unparsed:
         out.append({"label": "Python that did not parse", "files": unparsed, "depth": "secrets only",
-                    "text": "Python that did not parse: %s -- %s." % (_plural(unparsed, "file"), UNPARSED_TEXT)})
+                    "text": "Python that did not parse: %s \u2014 %s." % (_plural(unparsed, "file"), UNPARSED_TEXT)})
     return out
 
 
-def _python_text(rep, leads):
+def _python_text(rep, leads, python):
     """"every check ran" only when the report says nothing was skipped, crashed or left unread."""
+    if not python:
+        return PYTHON_TEXT_NONE
     crashed = any(f.get("code") == "check.crashed" for f in _findings(rep))
     if leads:
         return PYTHON_TEXT_PARTIAL
@@ -464,6 +479,132 @@ def fix_first(rep, top=10):
 def fix_first_notes(rep, top=10):
     """The plan's notes, unchanged: they carry the "a Safe FAIL caps the grade" sentence among others."""
     return verify.plan(rep, top=top)["notes"]
+
+
+FLOOR_NAME = {"safe": "Safety", "works": "Works", "complete": "Completeness"}
+
+
+def fix_first_lead(rep):
+    """One plain sentence for above the plan's notes, or None. The scanner's floor note ("Safe is at 0/100 with 174
+    points deducted ...") is exact but hard to read; this says the same thing in plain words, for the dimensions
+    where that note applies (the same test verify.plan uses, read from the report's own deductions)."""
+    if rep.get("status") == "INVALID":
+        return None
+    floored = []
+    for name in score.DIMENSIONS:
+        dim = (rep.get("dimensions") or {}).get(name) or {}
+        excess = int(dim.get("deducted") or 0) - 100
+        rows = dim.get("checks") or []
+        if excess > 0 and rows and max(int(r.get("deduction") or 0) for r in rows) <= excess:
+            floored.append(FLOOR_NAME[name])
+    if not floored:
+        return None
+    return ("%s problems do not raise the grade until most of them are fixed, so they can show +0 here. Fix them "
+            "first anyway." % " and ".join(floored))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# C7 / C9: before and after
+
+
+def diff_sentence(d):
+    """One sentence for a verify.diff result: how many findings went away, how many are new, and what the grade did.
+    The counts and the grades are the diff's own."""
+    counts = d.get("counts") or {}
+    grade = d.get("grade") or {}
+    return "%d fixed, %d new, grade %s \u2192 %s" % (int(counts.get("fixed") or 0), int(counts.get("new") or 0),
+                                                     grade.get("before") or "none", grade.get("after") or "none")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# S3 (P78 C4): every file, one honest label each
+
+QUALITY = "Quality"
+FILE_LEVELS = (HIGH, MEDIUM, LOW, QUALITY)
+WHY_PARTLY_UNPARSED = "this file did not parse, so only the checks that need no parse tree ran"
+WHY_PARTLY_LANGUAGE = "%s code is not analysed yet; only key shapes were checked"
+WHY_PARTLY_NO_LANGUAGE = "this is not Python, so only key shapes were checked"
+_AND_MORE = re.compile(r" and \d+ more$")
+
+
+def _unparsed_names(rep):
+    """The files the report says did not parse: a works.syntax finding's file, or a name in a "did not parse" reason
+    (report.status_of lists up to five names, then "and N more")."""
+    names = {f["node"].rpartition(":")[0] or f["node"] for f in _findings(rep)
+             if f.get("code") == "works.syntax" and isinstance(f.get("node"), str)}
+    for reason in _reasons(rep):
+        head, _, listing = reason.partition(": ")
+        if "did not parse" in head:
+            names.update(n.strip() for n in _AND_MORE.sub("", listing).split(", ") if n.strip())
+    return names
+
+
+def _file_of(node, known):
+    """The file a finding's node ("file:line" or a bare file) points at, or None for a project-level node."""
+    if not isinstance(node, str):
+        return None
+    if node in known:
+        return node
+    head, _, tail = node.rpartition(":")
+    return head if tail.isdigit() and head in known else None
+
+
+def file_rows(rep, inventory):
+    """One row per distinct file the scan saw, sorted by rel; the report is read, never changed. inventory is
+    walk.walk()'s result for the same scan. A file is labelled, in this order:
+      Not read        walk put it in skipped (binary, symlink, unreadable, too large), whatever the findings say
+      High/Medium/Low its worst Safe finding (FAIL, WARN, INFO); findings of any other check count as Quality
+      Partly checked  a source file in a language this tool does not analyse, or a Python file that did not parse
+      No known risks found  a Python file that fully parsed, or a manifest
+    A file the tool did not really read is never labelled "No known risks found"."""
+    skipped = dict(inventory.get("skipped") or [])
+    python, manifests = set(inventory.get("python") or []), set(inventory.get("manifests") or [])
+    other = set(inventory.get("other") or [])
+    known = python | manifests | other | set(skipped)
+    counts = {rel: dict.fromkeys(FILE_LEVELS, 0) for rel in known}
+    worst = {}
+    for f in _findings(rep):
+        rel = _file_of(f.get("node"), known)
+        if rel is None:
+            continue
+        if score.dimension_of(f.get("code")) == "safe" and f.get("level") in LEVEL_LABEL:
+            label = LEVEL_LABEL[f["level"]]
+            counts[rel][label] += 1
+            worst[rel] = min(worst.get(rel, label), label, key=FILE_LEVELS.index)
+        else:
+            counts[rel][QUALITY] += 1
+    unparsed = _unparsed_names(rep)
+    rows = []
+    for rel in sorted(known):
+        kind = ("not_read" if rel in skipped else "python" if rel in python
+                else "manifest" if rel in manifests else "other")
+        why_not_read = skipped.get(rel)
+        why_partly = None
+        if kind == "not_read":
+            risk = NOT_READ
+        elif rel in worst:
+            risk = worst[rel]
+        elif kind == "other":
+            risk = PARTLY_CHECKED
+            stem, dot, ext = rel.rsplit("/", 1)[-1].rpartition(".")
+            language = LANGUAGES.get("." + ext.lower()) if dot and stem else None
+            why_partly = WHY_PARTLY_LANGUAGE % language if language else WHY_PARTLY_NO_LANGUAGE
+        elif kind == "python" and rel in unparsed:
+            risk, why_partly = PARTLY_CHECKED, WHY_PARTLY_UNPARSED
+        else:
+            risk = NONE_FOUND
+        rows.append({"rel": rel, "kind": kind, "why_not_read": why_not_read, "why_partly": why_partly,
+                     "findings": counts[rel], "risk": risk})
+    return rows
+
+
+def file_counts(rows):
+    """The five numbers the file filter shows, derived from the rows and nothing else."""
+    return {"all": len(rows),
+            "with_findings": sum(1 for r in rows if any(r["findings"].values())),
+            "no_known_risks": sum(1 for r in rows if r["risk"] == NONE_FOUND),
+            "partly_checked": sum(1 for r in rows if r["risk"] == PARTLY_CHECKED),
+            "not_read": sum(1 for r in rows if r["risk"] == NOT_READ)}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -541,6 +682,20 @@ def selftest():
              for n in (0, 1, 7, 20, 60)]
     plan_items = fix_first(mixed, top=1)
 
+    inventory = {"python": ["a.py", "b.py", "c.py", "setup.py"], "manifests": ["requirements.txt", "setup.py"],
+                 "other": ["index.js", "notes.txt", "Makefile"], "skipped": [("blob.bin", "binary")],
+                 "excluded": 0, "ignored": 0}
+    rows_rep = _demo([f("exec.shell", "FAIL", "b.py:3"), f("net.egress", "INFO", "b.py:5"),
+                      f("works.syntax", "FAIL", "c.py:1"), f("complete.readme_missing", "WARN", "a.py"),
+                      f("supply.lookalike", "WARN", "requirements.txt:1"), f("secret.key", "FAIL", "index.js:1"),
+                      f("secret.key", "FAIL", "blob.bin:1"), f("complete.readme_missing", "WARN", ".")])
+    rows_before = copy.deepcopy(rows_rep)
+    rows = {r["rel"]: r for r in file_rows(rows_rep, inventory)}
+    reason_only = {r["rel"]: r for r in file_rows(
+        _demo([], status="PARTIAL", reasons=["2 Python file(s) did not parse: c.py, d.py"]), inventory)}
+    more = {r["rel"]: r for r in file_rows(
+        _demo([], status="PARTIAL", reasons=["7 Python file(s) did not parse: a.py, b.py and 5 more"]), inventory)}
+
     checks = [
         ("labels_are_the_five", set(LABELS) == {HIGH, MEDIUM, LOW, NONE_FOUND, COULD_NOT_CHECK}),
         ("harm_high", harm(high)["level"] == HIGH and harm(high)["counts"] == {"FAIL": 1, "WARN": 1, "INFO": 0}),
@@ -566,7 +721,7 @@ def selftest():
         ("checked_lines_python_first", [e["label"] for e in checked_lines(low)][0] == "Python"
          and checked_lines(low)[0]["depth"] == "full"),
         ("checked_lines_language_named", [e for e in checked_lines(no_python) if e["label"] == "JavaScript"]
-         and checked_lines(no_python)[-1]["text"].startswith("JavaScript: 1 file --")),
+         and checked_lines(no_python)[-1]["text"].startswith("JavaScript: 1 file \u2014")),
         ("checked_lines_unknown_extension", ".zzq" in [e["label"] for e in checked_lines(unknown_ext)]),
         ("checked_lines_skipped_and_unparsed",
          {"Skipped", "Python that did not parse"} <= {e["label"] for e in checked_lines(skipped)}
@@ -575,6 +730,13 @@ def selftest():
          "every" in checked_lines(low)[0]["text"]
          and "every" not in [e for e in checked_lines(crashed_rep) if e["label"] == "Python"][0]["text"]
          and "every" not in [e for e in checked_lines(no_python) if e["label"] == "Python"][0]["text"]),
+        ("checked_lines_no_python_claims_nothing_ran",
+         [e["text"] for e in checked_lines(no_python) if e["label"] == "Python"][0] == "Python: 0 files \u2014 %s."
+         % PYTHON_TEXT_NONE),
+        ("no_ascii_double_dash", not [s for s in sentences if " -- " in (s or "")]),
+        ("partial_clause_once", sum(_PARTIAL_CLAUSE in score_sentence(d, no_python)
+                                    for d in ("safe", "works", "complete", "overall")) <= 1
+         and _PARTIAL_CLAUSE not in score_sentence("safe", no_python)),
         ("status_reasons_first", checked_lines(invalid)[0]["text"].endswith(invalid["status_reasons"][0])),
         ("finding_card_known", card["what"] == _title("secret.key") and card["why"] == WHY["secret.key"]
          and card["how"] == catalogue.CATALOGUE["secret.key"]["fix"] and card["confidence"] == "LIKELY"
@@ -586,6 +748,47 @@ def selftest():
          and plan_items[0]["first_location"] == verify.plan(mixed, top=1)["items"][0]["locations"][0]),
         ("fix_first_notes_pass_through", fix_first_notes(mixed) == verify.plan(mixed, top=10)["notes"]),
         ("never_mutates", high == before),
+        ("diff_sentence", diff_sentence(verify.diff(high, medium)).startswith("2 fixed, 1 new, grade %s \u2192 %s"
+                                                                         % (high["scores"]["grade"],
+                                                                            medium["scores"]["grade"]))),
+        ("fix_first_lead_only_when_floored", fix_first_lead(high) is None and fix_first_lead(invalid) is None),
+        ("partial_said_once_in_overall", score_sentence("overall", no_python).count("PARTIAL")
+         + score_sentence("overall", no_python).count(_PARTIAL_CLAUSE) == 1),
+        ("file_rows_one_row_per_file_sorted", list(rows) == sorted(rows) and len(rows) == 9
+         and [r["rel"] for r in file_rows(rows_rep, inventory)] == sorted(rows)),
+        ("file_rows_worst_safe_finding_wins", rows["b.py"]["risk"] == HIGH
+         and rows["b.py"]["findings"] == {HIGH: 1, MEDIUM: 0, LOW: 1, QUALITY: 0}
+         and rows["requirements.txt"]["risk"] == MEDIUM),
+        ("file_rows_other_dimensions_are_quality", rows["a.py"]["risk"] == NONE_FOUND
+         and rows["a.py"]["findings"][QUALITY] == 1 and not any(rows["a.py"]["findings"][k] for k in LEVEL_LABEL.values())),
+        ("file_rows_unparsed_python_is_partly_checked", rows["c.py"]["risk"] == PARTLY_CHECKED
+         and rows["c.py"]["why_partly"] == WHY_PARTLY_UNPARSED
+         and reason_only["c.py"]["risk"] == PARTLY_CHECKED and reason_only["a.py"]["risk"] == NONE_FOUND
+         and more["a.py"]["risk"] == PARTLY_CHECKED and more["c.py"]["risk"] == NONE_FOUND),
+        ("file_rows_other_files_name_their_language", rows["notes.txt"]["risk"] == PARTLY_CHECKED
+         and rows["Makefile"]["why_partly"] == WHY_PARTLY_NO_LANGUAGE
+         and reason_only["index.js"]["risk"] == PARTLY_CHECKED
+         and reason_only["index.js"]["why_partly"].startswith("JavaScript code is not analysed yet")),
+        ("file_rows_not_read_wins_over_findings", rows["blob.bin"]["risk"] == NOT_READ
+         and rows["blob.bin"]["why_not_read"] == "binary" and rows["blob.bin"]["kind"] == "not_read"),
+        ("file_rows_a_secret_in_another_language_is_high", rows["index.js"]["risk"] == HIGH
+         and rows["index.js"]["why_partly"] is None),
+        ("file_rows_setup_py_is_one_row", [r["kind"] for r in file_rows(rows_rep, inventory)
+                                           if r["rel"] == "setup.py"] == ["python"]
+         and rows["requirements.txt"]["kind"] == "manifest"),
+        ("file_rows_unchecked_files_are_never_no_known_risks", not [
+            r for r in rows.values() if r["kind"] in ("other", "not_read") and r["risk"] == NONE_FOUND]
+         and not [r for r in reason_only.values() if r["kind"] in ("other", "not_read") and r["risk"] == NONE_FOUND]),
+        ("file_rows_project_level_findings_belong_to_no_file", sum(
+            sum(r["findings"].values()) for r in rows.values()) == 7),
+        ("file_counts_from_the_rows", file_counts(list(rows.values())) == {
+            "all": 9, "with_findings": 6, "no_known_risks": 2, "partly_checked": 3, "not_read": 1}
+         and file_counts([]) == dict.fromkeys(("all", "with_findings", "no_known_risks", "partly_checked",
+                                               "not_read"), 0)),
+        ("file_rows_never_mutates", rows_rep == rows_before),
+        ("file_rows_no_verdict_phrase", not [
+            v for r in rows.values() for v in (r["risk"], r["why_partly"], r["why_not_read"])
+            if VERDICT_PHRASES.search(v or "")]),
     ]
     return summarize("plain", checks)
 

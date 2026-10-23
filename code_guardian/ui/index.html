@@ -1,17 +1,59 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-size="normal">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>code-guardian</title>
 <link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer blocking="render"></script>
 </head>
 <body>
 <header class="top">
-  <span class="brand">code-guardian <span class="brand-sub">check</span></span>
-  <button type="button" class="ghost" id="new-check" hidden>New check</button>
+  <div class="brandbox">
+    <a id="luminari" class="luminari" href="https://github.com/LuminariSoftwares" rel="noopener noreferrer"><svg id="luminari-mark" viewBox="0 0 64 64" aria-hidden="true"></svg><span>Luminari</span></a>
+    <span class="brand">code-guardian <span class="brand-sub">check</span></span>
+  </div>
+  <div class="top-actions">
+    <button type="button" class="ghost icon-btn" id="new-check" aria-label="New check" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5 V19 M5 12 H19"/></svg><span class="btn-label">New check</span></button>
+    <button type="button" class="ghost icon-btn gear" id="settings-button" data-must-show title="Settings" aria-haspopup="dialog" aria-expanded="false" aria-controls="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.39 10.23 L21.91 10.67 L21.91 13.33 L19.39 13.77 L18.48 15.97 L19.95 18.07 L18.07 19.95 L15.97 18.48 L13.77 19.39 L13.33 21.91 L10.67 21.91 L10.23 19.39 L8.03 18.48 L5.93 19.95 L4.05 18.07 L5.52 15.97 L4.61 13.77 L2.09 13.33 L2.09 10.67 L4.61 10.23 L5.52 8.03 L4.05 5.93 L5.93 4.05 L8.03 5.52 L10.23 4.61 L10.67 2.09 L13.33 2.09 L13.77 4.61 L15.97 5.52 L18.07 4.05 L19.95 5.93 L18.48 8.03 Z"/><circle cx="12" cy="12" r="3.2"/></svg><span class="btn-label">Settings</span></button>
+  </div>
 </header>
+
+<!-- Settings: saved in this browser (localStorage), applied by app.js before the page is drawn. Adding a setting later
+     is one entry in SETTINGS in app.js and one fieldset here. -->
+<section id="settings" class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+  <div class="sheet-panel" tabindex="-1">
+    <div class="sheet-head">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" class="ghost" id="settings-close">Close</button>
+    </div>
+    <p class="hint">Saved in this browser only. Nothing is sent anywhere.</p>
+    <fieldset data-setting="theme">
+      <legend>Theme</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        <label class="choice"><input type="radio" name="theme" value="light"><span>Light</span></label>
+      </div>
+    </fieldset>
+    <fieldset data-setting="size">
+      <legend>Text size</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="size" value="normal"><span>Normal</span></label>
+        <label class="choice"><input type="radio" name="size" value="larger"><span>Larger</span></label>
+        <label class="choice"><input type="radio" name="size" value="largest"><span>Largest</span></label>
+      </div>
+    </fieldset>
+    <fieldset data-setting="brand">
+      <legend>The Luminari name at the top</legend>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="brand" value="on"><span>Show</span></label>
+        <label class="choice"><input type="radio" name="brand" value="off"><span>Hide</span></label>
+      </div>
+    </fieldset>
+    <p id="settings-more" class="hint">More options will appear here in later versions.</p>
+  </div>
+</section>
 
 <main id="main">
 
@@ -29,10 +71,13 @@
   <form id="scan-form" class="scan-form card" autocomplete="off">
     <label for="path">Folder path</label>
     <div class="row">
-      <input type="text" id="path" name="path" class="mono" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="Paste the folder path here" required>
+      <input type="text" id="path" name="path" class="mono" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="Paste the folder path here" required aria-describedby="path-refused os-hint">
+      <button type="button" class="ghost" id="browse">Browse…</button>
       <button type="submit" class="primary" id="scan-button">Check this folder</button>
     </div>
+    <p class="path-refused" id="path-refused" role="alert" hidden></p>
     <p class="hint" id="os-hint">Paste the full path of the folder you want checked.</p>
+    <p class="hint" id="browse-hint">Opens a folder window on the computer running code-guardian.</p>
   </form>
   <div id="scanning" class="card status-line" role="status" hidden></div>
   <div id="open-error" class="alert" role="alert" hidden></div>
@@ -41,17 +86,59 @@
     <ul id="recent"></ul>
     <p id="recent-empty" class="hint">Nothing yet. Checks you run appear here until you close code-guardian in the terminal.</p>
   </section>
+  <form id="saved-form" class="card open-saved" autocomplete="off">
+    <h2>Open a saved check</h2>
+    <p class="hint">A file saved with <span class="mono">code-guardian scan FOLDER --json &gt; check.json</span>. It is read here and shown as it was: no folder is read, and nothing is uploaded anywhere.</p>
+    <label for="open-saved">Saved check file</label>
+    <input type="file" id="open-saved" accept=".json,application/json">
+  </form>
+  <p class="open-compare"><button type="button" class="ghost" data-screen="compare">Compare two saved files</button></p>
 </section>
 
-<!-- One result: the tabs and the scanned folder are shared by the result screens below. -->
+<!-- One result: the tabs, the summary rail and the scanned folder are shared by the result screens below. -->
+<div class="frame" id="frame" data-rail="strip">
 <nav class="tabs" id="tabs" aria-label="Result" hidden>
-  <button type="button" data-screen="result">Summary</button>
-  <button type="button" data-screen="fixfirst">Fix first</button>
-  <button type="button" data-screen="findings">Findings</button>
-  <button type="button" data-screen="code">Code</button>
-  <button type="button" data-screen="compare">Compare</button>
+  <button type="button" data-screen="result" data-must-show>Summary</button>
+  <button type="button" data-screen="fixfirst" data-must-show>Fix first</button>
+  <button type="button" data-screen="findings" data-must-show>Findings</button>
+  <button type="button" data-screen="code" data-must-show>Code</button>
+  <button type="button" data-screen="compare" data-must-show>Compare</button>
 </nav>
+
+<!-- The same numbers on every tab, from the scan response. Below 900 px a strip under the tabs (one line; the details
+     open on a tap); from 900 px a column beside the screen that the toggle shrinks to a slim icon rail. app.js keeps
+     data-rail ("strip", "column" or "mini") and aria-expanded in step with the window. -->
+<aside id="summary-rail" class="rail" aria-label="This check at a glance" hidden>
+  <div class="rail-line">
+    <button type="button" id="rail-toggle" class="rail-toggle" aria-expanded="true" aria-controls="rail-details" aria-label="Hide summary" title="Hide summary"><span class="rail-toggle-text">Hide summary</span><svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6 L15 12 L9 18"/></svg></button>
+    <p class="rail-grade"><span class="rail-key">Grade</span> <span id="rail-grade" data-must-show></span></p>
+    <dl class="rail-stats rail-counts">
+      <div><dt class="High"><span class="lw">High</span><span class="li" aria-hidden="true">H</span></dt><dd id="rail-high" data-must-show></dd></div>
+      <div><dt class="Medium"><span class="lw">Medium</span><span class="li" aria-hidden="true">M</span></dt><dd id="rail-medium" data-must-show></dd></div>
+      <div><dt class="Low"><span class="lw">Low</span><span class="li" aria-hidden="true">L</span></dt><dd id="rail-low" data-must-show></dd></div>
+      <div class="rail-q"><dt class="Quality"><span class="lw">Quality</span><span class="li" aria-hidden="true">Q</span></dt><dd id="rail-quality" data-must-show></dd></div>
+    </dl>
+  </div>
+  <div class="rail-details" id="rail-details">
+    <div class="rail-harm" id="rail-harm">
+      <p class="harm-label" id="rail-harm-label"><span class="harm-icon" aria-hidden="true"></span><span id="rail-harm-word" data-must-show></span></p>
+      <span class="harm-mini" id="rail-harm-mini" role="img" aria-label="" hidden><span class="harm-initial" aria-hidden="true"></span><span class="harm-dot" aria-hidden="true"></span></span>
+      <span class="flag" id="rail-partial" data-must-show hidden>partial check</span>
+    </div>
+    <dl class="rail-stats rail-facts" id="rail-facts">
+      <div><dt>Safe</dt><dd id="rail-safe"></dd></div>
+      <div><dt>Fix first</dt><dd id="rail-fix"></dd></div>
+    </dl>
+    <div class="rail-again">
+      <button type="button" class="ghost icon-btn" id="check-again" data-must-show title="Reads the files again now" aria-label="Check again"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12 A8 8 0 1 1 17.66 6.34 M20 4 V9 H15"/></svg><span class="again-label">Check again</span></button>
+      <p class="rail-when" id="rail-when" role="status"></p>
+    </div>
+  </div>
+</aside>
+
+<div class="frame-body">
 <p class="scanned" id="scanned" hidden>Folder: <span class="mono" id="scanned-path"></span> <span id="scanned-when"></span></p>
+<div id="again-error" class="alert" role="alert" hidden></div>
 
 <!-- Result: how worried to be, first. -->
 <section id="screen-result" class="screen" hidden>
@@ -62,7 +149,7 @@
   <div id="harm" class="harm">
     <p class="eyebrow">How worried to be</p>
     <div class="harm-head">
-      <p class="harm-word" id="harm-word"></p>
+      <p class="harm-word harm-label"><span class="harm-icon" aria-hidden="true"></span><span id="harm-word"></span></p>
       <span class="flag" id="partial-flag" hidden>partial check</span>
     </div>
     <p class="harm-why" id="harm-why"></p>
@@ -77,12 +164,13 @@
       <dt>High</dt><dd>A Safe check matched a pattern it treats as serious. Read these first.</dd>
       <dt>Medium</dt><dd>A Safe check matched, but it may be fine where it is. Worth a look.</dd>
       <dt>Low</dt><dd>Things to know about, such as where the program talks to the network. Not a problem on their own.</dd>
-      <dt>No known risks found</dt><dd>No Safe check reported anything in the files it could read. A static check only sees the patterns it knows.</dd>
+      <dt>No known risks found</dt><dd>No Safe check reported anything in the files it could read. That is not the same as “all clear”: a static check only sees the patterns it knows, so this label is grey, not green.</dd>
       <dt>Could not check</dt><dd>The scan could not judge this folder, so there is no grade.</dd>
       <dt>partial check</dt><dd>Some of the folder was not fully checked; the first line on this screen says which part.</dd>
     </dl>
   </details>
   <div class="next">
+    <button type="button" class="ghost" id="check-again-summary" title="Reads the files again now">Check again</button>
     <button type="button" class="ghost" data-screen="fixfirst">What to fix first</button>
     <button type="button" class="ghost" data-screen="findings">All findings</button>
   </div>
@@ -92,6 +180,10 @@
 <section id="screen-fixfirst" class="screen" hidden>
   <h1>Fix these first</h1>
   <p class="intro">Ranked by how many points each fix would add to the grade. The order and the numbers are the scan's own.</p>
+  <div class="fix-notes" id="fix-notes" role="note" hidden>
+    <p class="fix-notes-title">Read this before the list</p>
+    <div id="fix-notes-body"></div>
+  </div>
   <ol class="fix-list" id="fix-list"></ol>
   <p id="fix-empty" class="hint" hidden>Nothing to fix: no finding takes points off.</p>
 </section>
@@ -103,50 +195,134 @@
   <div id="groups"></div>
 </section>
 
-<!-- Code: the files the findings point to, and the lines. -->
+<!-- Code: every file the check saw, each honestly labelled, and the lines of the one picked. -->
 <section id="screen-code" class="screen" hidden>
   <h1>Code</h1>
+  <p class="saved-note" id="saved-note" role="note">This is a saved check. The files are not open here; check the folder to see them.</p>
   <div class="code-layout">
-    <nav class="files" aria-labelledby="files-title">
-      <h2 id="files-title">Files with findings</h2>
-      <ul id="file-list"></ul>
-      <p class="files-note">Only the files a finding points to are listed.</p>
-    </nav>
+    <details class="files-drawer" id="files-drawer" open>
+      <summary><h2 id="files-title">Files</h2><span class="sr-only" id="files-picked"></span></summary>
+      <nav class="files" aria-labelledby="files-title">
+        <div class="files-tools">
+          <label for="file-filter" class="sr-only">Which files to list</label>
+          <select id="file-filter">
+            <option value="all">All files</option>
+            <option value="with">Files with findings</option>
+            <option value="none">No known risks found</option>
+            <option value="partly">Partly checked</option>
+            <option value="notread">Not read</option>
+          </select>
+          <input type="search" id="file-find" placeholder="Find a file" aria-label="Find a file" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="files-note" id="files-capped" role="status" hidden></p>
+        <ul id="file-list"></ul>
+        <p class="files-note" id="files-note"></p>
+      </nav>
+    </details>
     <div class="viewer">
       <div class="viewer-bar">
-        <span class="file-name mono" id="file-name">Pick a file</span>
+        <span class="file-name mono" id="file-name" data-must-show>Pick a file</span>
         <form class="jump" id="jump-form">
-          <div>
-            <label for="jump-line">Go to line</label>
-            <input type="number" id="jump-line" min="1" inputmode="numeric">
-          </div>
+          <label for="jump-line">Go to line</label>
+          <input type="number" id="jump-line" min="1" inputmode="numeric">
           <button type="submit" class="ghost">Go</button>
         </form>
       </div>
       <pre class="code" id="code" tabindex="0" aria-label="File contents"><span class="code-empty">Pick a file from the list, or tap a location on a finding.</span></pre>
+    </div>
+    <!-- Below 1280 px this sits under the viewer; from 1280 px it is a column beside it. -->
+    <aside class="code-aside" id="code-aside" aria-label="Questions about these lines">
       <div class="explain-bar card">
-        <p id="selection-note" class="hint">Select some lines above to ask what they do.</p>
+        <p id="selection-note" class="hint">Select some lines above, or type a start and end line, to ask what they do.</p>
+        <form class="range" id="range-form" autocomplete="off">
+          <span class="range-field"><label for="line-start">From line</label>
+          <input type="number" id="line-start" min="1" inputmode="numeric"></span>
+          <span class="range-field"><label for="line-end">to line</label>
+          <input type="number" id="line-end" min="1" inputmode="numeric"></span>
+        </form>
+        <p class="hint" id="range-msg" role="status" hidden></p>
         <div class="row">
           <button type="button" class="ghost" id="explain" disabled>Explain these lines</button>
         </div>
-        <p class="sent-to" id="sent-to">Sent to: nothing. No AI is connected in this version.</p>
-        <p class="later">Explaining lines arrives in a later version of code-guardian.</p>
+        <p class="sent-to" id="sent-to">Sent to: nothing yet. Only the lines you pick are ever sent, and only after you confirm.</p>
       </div>
       <section class="explain-panel card" id="explain-panel" hidden>
-        <h3>AI explanation -- may be wrong; does not change any score</h3>
+        <h3>AI explanation — may be wrong; does not change any score</h3>
         <div id="explain-body"></div>
       </section>
-    </div>
+      <details class="note-help card" id="note-help">
+        <summary>What the notes in the code mean</summary>
+        <p class="hint">A note under a line says what a check found there. Tap it to read why it matters and what to do. The level word at its start is the same as on the Findings screen.</p>
+      </details>
+    </aside>
   </div>
 </section>
 
-<!-- Before / After: built in a later version. -->
+<!-- Before / After: two checks of one folder, or two saved scan --json files. -->
 <section id="screen-compare" class="screen" hidden>
   <h1>Before and after</h1>
-  <p class="intro">Comparing two checks of the same folder -- what got fixed, what is new, and how the grade changed -- arrives in a later version of code-guardian.</p>
+  <p class="intro">What got fixed, what is new and what the grade did, between two checks. The counts and the grades are the scan's own.</p>
+  <div id="compare-error" class="alert" role="alert" hidden></div>
+  <div id="compare-status" class="card status-line" role="status" hidden></div>
+  <section id="compare-result" class="compare-result" aria-live="polite" hidden>
+    <p class="eyebrow" id="compare-what"></p>
+    <p class="diff-sentence" id="compare-sentence"></p>
+    <p class="hint" id="compare-scan-status" hidden></p>
+    <table class="score-change card">
+      <caption>Score change</caption>
+      <thead><tr><th scope="col">Score</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Change</th></tr></thead>
+      <tbody id="compare-scores"></tbody>
+    </table>
+    <details class="group diff-group" id="group-fixed" open>
+      <summary class="group-title"><span class="diff-name">Fixed</span><span class="count" id="count-fixed"></span></summary>
+      <p class="group-note">In the before check, gone from the after check.</p>
+      <ul class="diff-list" id="list-fixed"></ul>
+    </details>
+    <details class="group diff-group" id="group-new" open>
+      <summary class="group-title"><span class="diff-name">New</span><span class="count" id="count-new"></span></summary>
+      <p class="group-note">Not in the before check. A new High finding is marked “New High”: read those first.</p>
+      <ul class="diff-list" id="list-new"></ul>
+    </details>
+    <details class="group diff-group" id="group-unchanged">
+      <summary class="group-title"><span class="diff-name">Still there</span><span class="count" id="count-unchanged"></span></summary>
+      <p class="group-note">In both checks. Findings are matched by what they are and where; a line that only moved counts as the same finding.</p>
+      <ul class="diff-list" id="list-unchanged"></ul>
+    </details>
+  </section>
+  <form id="pick-form" class="card compare-pick" autocomplete="off">
+    <h2>Two checks from this session</h2>
+    <div class="pick-row">
+      <div>
+        <label for="pick-before">Before</label>
+        <select id="pick-before"></select>
+      </div>
+      <div>
+        <label for="pick-after">After</label>
+        <select id="pick-after"></select>
+      </div>
+    </div>
+    <p class="hint" id="pick-hint">Fix something, press “Check again”, then come back here: the last two checks of this folder are picked for you.</p>
+    <button type="submit" class="primary" id="pick-compare">Compare these two</button>
+  </form>
+  <form id="files-form" class="card compare-pick" autocomplete="off">
+    <h2>Or two saved files</h2>
+    <p class="hint">Files saved with <span class="mono">code-guardian scan FOLDER --json &gt; before.json</span>. They are read here and compared by this computer; nothing is uploaded anywhere.</p>
+    <div class="pick-row">
+      <div>
+        <label for="file-before">Before file</label>
+        <input type="file" id="file-before" accept=".json,application/json">
+      </div>
+      <div>
+        <label for="file-after">After file</label>
+        <input type="file" id="file-after" accept=".json,application/json">
+      </div>
+    </div>
+    <button type="submit" class="ghost" id="files-compare" disabled>Compare the two files</button>
+  </form>
 </section>
+</div>
+</div>
 
 </main>
-<script src="/app.js"></script>
 </body>
 </html>

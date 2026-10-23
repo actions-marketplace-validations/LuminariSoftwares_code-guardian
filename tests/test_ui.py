@@ -108,3 +108,362 @@ def test_a_failed_scan_leaves_no_scanning_entry(server, monkeypatch):
     status, body = call(server, "POST", "/api/scan", raw=raw)
     assert (status, json.loads(body)["error"]) == (500, "scan") and b"boom" not in body
     assert json.loads(call(server, "GET", "/api/scans")[1]) == []
+
+
+# ---- POST /api/explain (P76 S4): the refusals and the dry run; the sending is in test_p76_s4_acceptance.py -----------
+
+EXPLAIN_ENV = ("CODE_GUARDIAN_LLM_URL", "CODE_GUARDIAN_LLM_MODEL", "CODE_GUARDIAN_LLM_KEY", "CODE_GUARDIAN_LLM_TIMEOUT")
+
+
+@pytest.fixture
+def scanned(server, tmp_path, monkeypatch):
+    for k in EXPLAIN_ENV:
+        monkeypatch.delenv(k, raising=False)
+    (tmp_path / "a.py").write_text("one = 1\ntwo = 2\nthree = 3\n", encoding="utf-8")
+    (tmp_path / "blob.bin").write_bytes(b"\0\1\2")
+    status, raw = call(server, "POST", "/api/scan", json.dumps({"path": str(tmp_path), "goal_file": None}).encode())
+    assert status == 200
+    return json.loads(raw)["id"]
+
+
+def explain_call(server, **body):
+    status, raw = call(server, "POST", "/api/explain", json.dumps(body).encode())
+    return status, json.loads(raw)
+
+
+def test_explain_rejects_bad_bodies(server, scanned):
+    assert call(server, "POST", "/api/explain", b"{nope")[0] == 400
+    assert call(server, "POST", "/api/explain", b"[]")[0] == 400
+    good = {"id": scanned, "rel": "a.py", "start": 1, "end": 2}
+    for bad in ({"rel": "a.py"}, dict(good, id=1), dict(good, rel=None), dict(good, start="1"), dict(good, end=2.5),
+                dict(good, start=True), dict(good, end=None)):
+        assert explain_call(server, **bad)[0] == 400, bad
+    assert explain_call(server, **good)[0] == 200
+
+
+def test_explain_end_past_the_file_is_400(server, scanned):
+    status, js = explain_call(server, id=scanned, rel="a.py", start=3, end=4)
+    assert status == 400 and js["error"] == "range" and "3 lines" in js["detail"]
+
+
+def test_explain_unknown_scan_missing_and_binary_file(server, scanned):
+    assert explain_call(server, id="nope", rel="a.py", start=1, end=1) == (404, {"error": "scan"})
+    assert explain_call(server, id=scanned, rel="gone.py", start=1, end=1) == (404, {"error": "file"})
+    assert explain_call(server, id=scanned, rel="blob.bin", start=1, end=1) == (415, {"error": "binary"})
+    assert explain_call(server, id=scanned, rel="/etc/hosts", start=1, end=1) == (403, {"error": "outside"})
+
+
+def test_explain_dry_run_says_where_and_sends_nothing(server, scanned, stub, monkeypatch):
+    model = stub({("POST", "/api/chat"): (200, {"message": {"content": "x"}}, 0)})
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_URL", "http://user:secret@" + model.url.split("//")[1] + "/api/chat")
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_MODEL", "tiny")
+    status, js = explain_call(server, id=scanned, rel="a.py", start=1, end=2, dry_run=True)
+    assert status == 200 and js["text"] is None and js["note"] is None
+    assert js["sent"] == {"host": model.url.split("//")[1], "model": "tiny", "lines": 2}
+    assert model.requests == []
+    assert "secret" not in json.dumps(js)
+
+
+def test_explain_with_no_model_never_calls_out(server, scanned, monkeypatch):
+    note = "set CODE_GUARDIAN_LLM_URL and CODE_GUARDIAN_LLM_MODEL, then restart code-guardian ui"
+    for url, model in (("", ""), ("http://127.0.0.1:9", ""), ("", "m")):
+        monkeypatch.setenv("CODE_GUARDIAN_LLM_URL", url)
+        monkeypatch.setenv("CODE_GUARDIAN_LLM_MODEL", model)
+        for dry in (True, False):
+            assert explain_call(server, id=scanned, rel="a.py", start=1, end=1, dry_run=dry) == \
+                (200, {"text": None, "note": note, "sent": None})
+
+
+def test_explain_refused_url_is_a_note_not_a_crash(server, scanned, monkeypatch):
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_URL", "file:///etc/hosts")
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_MODEL", "m")
+    status, js = explain_call(server, id=scanned, rel="a.py", start=1, end=1)
+    assert status == 200 and js["text"] is None and js["sent"] is None and js["note"].startswith("explain skipped")
+
+
+def test_explain_reads_the_model_settings_per_request(server, scanned, stub, monkeypatch):
+    model = stub({("POST", "/api/chat"): (200, {"message": {"content": "ok"}}, 0)})
+    assert explain_call(server, id=scanned, rel="a.py", start=1, end=1)[1]["sent"] is None
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_URL", model.url)
+    monkeypatch.setenv("CODE_GUARDIAN_LLM_MODEL", "m")
+    assert explain_call(server, id=scanned, rel="a.py", start=1, end=1)[1]["text"] == "ok"
+
+
+# ---- POST /api/diff (P76 S5): the refusals and the memory; the happy paths are in test_p76_s5_acceptance.py ---------
+
+def diff_call(server, body):
+    status, raw = call(server, "POST", "/api/diff", json.dumps(body).encode())
+    return status, json.loads(raw)
+
+
+def scan_id(server, path):
+    status, raw = call(server, "POST", "/api/scan", json.dumps({"path": str(path), "goal_file": None}).encode())
+    assert status == 200
+    return json.loads(raw)["id"]
+
+
+def test_diff_keeps_only_the_last_reports(server, monkeypatch):
+    monkeypatch.setattr(ui, "REPORTS_KEPT", 2)
+    ids = [scan_id(server, CLEAN) for _ in range(3)]
+    assert diff_call(server, {"before": ids[0], "after": ids[2]})[0] == 404
+    status, d = diff_call(server, {"before": ids[1], "after": ids[2]})
+    assert status == 200 and d["counts"]["fixed"] == d["counts"]["new"] == 0
+    assert d["sentence"].startswith("0 fixed, 0 new, grade ")
+
+
+def test_diff_never_reads_a_path_given_as_saved_text(server, tmp_path):
+    saved = tmp_path / "saved.json"
+    saved.write_text(json.dumps(ui.report.scan(str(CLEAN))), encoding="utf-8")
+    status, d = diff_call(server, {"before_json": str(saved), "after_json": str(saved)})
+    assert (status, d["error"], d["side"]) == (400, "report", "before")
+
+
+def test_diff_refuses_half_pairs_and_non_reports(server):
+    good = json.dumps(ui.report.scan(str(CLEAN)))
+    assert diff_call(server, {"before": "x"})[0] == 400
+    assert diff_call(server, {"before_json": good})[0] == 400
+    assert diff_call(server, {"before": 1, "after": 2})[0] == 400
+    status, d = diff_call(server, {"before_json": good, "after_json": "[1, 2]"})
+    assert (status, d["error"], d["side"]) == (400, "report", "after")
+    old = json.loads(good)
+    for f in old["findings"]:
+        f.pop("fingerprint", None)
+    status, d = diff_call(server, {"before_json": json.dumps(old), "after_json": good})
+    assert (status, d["error"]) == (400, "report") and "fingerprint" in d["detail"]
+    assert call(server, "POST", "/api/diff", b"{nope")[0] == 400
+
+
+def test_scan_carries_the_fix_first_lead(server):
+    status, raw = call(server, "POST", "/api/scan", json.dumps({"path": str(ROOT / "tests" / "fixtures" / "risky_repo"),
+                                                                "goal_file": None}).encode())
+    plain_layer = json.loads(raw)["plain"]
+    assert status == 200 and plain_layer["fix_first_lead"].startswith("Safety problems do not raise the grade")
+
+
+# ---- GET /api/files (P78 S3): every file the scan saw, taken at scan time ------------------------------------------
+
+def files_call(server, scan, **kw):
+    status, raw = call(server, "GET", "/api/files?id=%s" % scan, **kw)
+    return status, json.loads(raw)
+
+
+def test_files_lists_what_the_scan_saw_with_counts_derived_from_the_rows(server, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "broken.py").write_text("def f(:\n", encoding="utf-8")
+    (tmp_path / "app.js").write_text("let a = 1;\n", encoding="utf-8")
+    (tmp_path / "blob.bin").write_bytes(b"\0\1")
+    (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("x\n", encoding="utf-8")
+    status, body = files_call(server, scan_id(server, tmp_path))
+    assert status == 200
+    assert [r["rel"] for r in body["files"]] == [".gitignore", "a.py", "app.js", "blob.bin", "broken.py"]
+    assert body["counts"] == ui.plain.file_counts(body["files"])
+    assert (body["ignored"], body["excluded"]) == (1, 0)
+    assert {r["rel"]: r["risk"] for r in body["files"]} == {
+        ".gitignore": "Partly checked", "a.py": "No known risks found", "app.js": "Partly checked",
+        "blob.bin": "Not read", "broken.py": "Partly checked"}
+
+
+def test_files_needs_the_token_and_only_answers_get(server, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    sid = scan_id(server, tmp_path)
+    assert files_call(server, sid, token=False) == (403, {"error": "token"})
+    status, raw = call(server, "POST", "/api/files?id=%s" % sid)
+    assert (status, json.loads(raw)) == (404, {"error": "route"})
+    assert files_call(server, "") == (404, {"error": "scan"})
+    assert call(server, "GET", "/api/files")[0] == 404
+
+
+def test_files_honours_the_goal_files_excludes_the_way_the_scan_does(server, tmp_path):
+    (tmp_path / "gen").mkdir()
+    (tmp_path / "main.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "gen" / "made.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / ui.goal.FILENAME).write_text(ui.goal.render("demo", ["main.py"], exclude=["gen/*"]), encoding="utf-8")
+    status, body = files_call(server, scan_id(server, tmp_path))
+    assert status == 200 and body["excluded"] >= 1
+    assert [r["rel"] for r in body["files"] if r["rel"].startswith("gen/")] == []
+    assert "main.py" in [r["rel"] for r in body["files"]]
+
+
+def test_files_uses_the_goal_file_named_in_the_request(server, tmp_path):
+    (tmp_path / "keep.py").write_text("X = 1\n", encoding="utf-8")
+    (tmp_path / "skip.py").write_text("X = 2\n", encoding="utf-8")
+    elsewhere = tmp_path.parent / (tmp_path.name + "-goal.toml")
+    elsewhere.write_text(ui.goal.render("demo", ["keep.py"], exclude=["skip.py"]), encoding="utf-8")
+    raw = json.dumps({"path": str(tmp_path), "goal_file": str(elsewhere)}).encode()
+    status, scanned = call(server, "POST", "/api/scan", raw)
+    assert status == 200
+    status, body = files_call(server, json.loads(scanned)["id"])
+    assert [r["rel"] for r in body["files"]] == ["keep.py"] and body["excluded"] == 1
+
+
+def test_files_for_one_file_scanned_as_a_copy(server, tmp_path):
+    one = tmp_path / "only.py"
+    one.write_text("x = 1\n", encoding="utf-8")
+    status, body = files_call(server, scan_id(server, one))
+    assert status == 200 and [r["rel"] for r in body["files"]] == ["only.py"]
+
+
+def test_files_are_kept_and_dropped_with_the_reports(server, monkeypatch):
+    monkeypatch.setattr(ui, "REPORTS_KEPT", 2)
+    ids = [scan_id(server, CLEAN) for _ in range(3)]
+    assert files_call(server, ids[0]) == (404, {"error": "scan"})
+    assert files_call(server, ids[1])[0] == files_call(server, ids[2])[0] == 200
+    assert sorted(server.inventories) == sorted(ids[1:])
+
+
+def test_a_check_without_an_inventory_is_404_not_a_crash(server):
+    sid = scan_id(server, CLEAN)
+    server.inventories.clear()
+    assert files_call(server, sid) == (404, {"error": "scan"})
+
+
+def test_a_walk_that_crashes_leaves_the_scan_working_and_the_list_absent(server, monkeypatch):
+    real = ui.walk.walk
+    calls = []
+
+    def flaky(root, exclude=()):
+        calls.append(root)
+        if len(calls) == 1:  # the one taken for the file list; the scan's own walk is a later call
+            raise OSError("boom")
+        return real(root, exclude=exclude)
+
+    monkeypatch.setattr(ui.walk, "walk", flaky)
+    sid = scan_id(server, CLEAN)
+    assert files_call(server, sid) == (404, {"error": "scan"})
+    assert len(calls) >= 1
+
+
+def test_the_inventory_is_walked_before_the_scan_and_never_changes_the_report(server, monkeypatch):
+    order = []
+    real_walk, real_scan = ui.walk.walk, ui.report.scan
+    monkeypatch.setattr(ui.walk, "walk", lambda *a, **k: order.append("walk") or real_walk(*a, **k))
+    monkeypatch.setattr(ui.report, "scan", lambda *a, **k: order.append("scan") or real_scan(*a, **k))
+    sid = scan_id(server, CLEAN)
+    assert order[:2] == ["walk", "scan"]
+    assert server.report_of(sid) == ui.redact_report(real_scan(str(CLEAN)))
+
+
+# ---- P78 S4: the refusal before any read, and POST /api/browse's own refusals -------------------------------------
+
+
+def test_a_refused_folder_never_reaches_the_scanner(server, monkeypatch):
+    import os
+
+    calls = []
+    monkeypatch.setattr(ui.report, "scan", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(ui.walk, "walk", lambda *a, **k: calls.append(a))
+    raw = json.dumps({"path": os.path.expanduser("~"), "goal_file": None}).encode("utf-8")
+    status, body = call(server, "POST", "/api/scan", raw=raw)
+    assert (status, json.loads(body)["error"]) == (400, "refused") and calls == []
+    assert json.loads(call(server, "GET", "/api/scans")[1]) == []
+
+
+@pytest.mark.parametrize("body", [{"start": 3}, {"start": ["/"]}, {"start": True}, ["/"], "x"])
+def test_browse_refuses_a_start_that_is_not_a_string_or_null(server, body):
+    server.dialog_runner = lambda *a, **k: pytest.fail("the dialog runner was called")
+    status, raw = call(server, "POST", "/api/browse", raw=json.dumps(body).encode("utf-8"))
+    assert status == 400 and json.loads(raw)["error"] in ("start", "json")
+
+
+def test_browse_releases_the_lock_after_a_runner_that_raises(server):
+    def boom(*a, **k):
+        raise OSError("no such interpreter")
+
+    server.dialog_runner = boom
+    raw = json.dumps({"start": None}).encode("utf-8")
+    status, body = call(server, "POST", "/api/browse", raw=raw)
+    assert status == 500 and json.loads(body) == {"error": "browse", "detail": "OSError"}
+    server.dialog_runner = lambda *a, **k: type("Done", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+    status, body = call(server, "POST", "/api/browse", raw=raw)
+    assert (status, json.loads(body)) == (200, {"path": None, "cancelled": True})
+
+
+# ---- P78 S4 review: a folder name outside the console's character set reaches the server intact -------------------
+
+WIDE_NAME = "proj-" + chr(0x9879) + chr(0x76EE)  # two CJK characters, none of them in cp1252
+
+
+def test_dialog_source_prints_a_name_outside_the_console_code_page(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    stub = tmp_path / "stub" / "tkinter"
+    stub.mkdir(parents=True)
+    (stub / "__init__.py").write_text("class TclError(Exception):\n    pass\n\n\nclass Tk:\n"
+                                      "    def __getattr__(self, name):\n        return lambda *a, **kw: None\n",
+                                      encoding="utf-8")
+    (stub / "filedialog.py").write_text("def askdirectory(**kw):\n    return %r\n" % WIDE_NAME, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(PYTHONPATH=str(stub.parent), PYTHONIOENCODING="cp1252")
+    # no -I, as in the acceptance file: -I would ignore PYTHONPATH and find the real tkinter
+    done = subprocess.run([sys.executable, "-c", ui.DIALOG_SOURCE, str(tmp_path)], cwd=str(stub.parent), env=env,
+                          capture_output=True, encoding="utf-8", timeout=60)
+    assert done.returncode == 0, (done.returncode, done.stderr)
+    assert done.stdout.rstrip("\r\n") == WIDE_NAME
+
+
+def test_browse_asks_the_runner_for_utf8(server):
+    seen = []
+
+    def runner(args, **kw):
+        seen.append(kw)
+        return type("Done", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+    server.dialog_runner = runner
+    call(server, "POST", "/api/browse", raw=json.dumps({"start": None}).encode("utf-8"))
+    assert seen and seen[0].get("encoding") == "utf-8" and seen[0].get("text") is True, seen
+
+
+# ---- re-open: a stored check and a saved one (P78 S5) --------------------------------------------------------------
+
+def open_call(server, text):
+    status, raw = call(server, "POST", "/api/open", json.dumps({"json": text}).encode())
+    return status, json.loads(raw)
+
+
+def test_open_over_the_body_limit_is_413_and_holds_nothing(server):
+    # Only the header claims too much and no body follows: the server answers from Content-Length and closes, so a
+    # client still writing a megabyte would race that close (EPIPE / ECONNRESET on Linux and macOS).
+    port = server.server_address[1]
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=60)
+    conn.putrequest("POST", "/api/open", skip_host=True, skip_accept_encoding=True)
+    conn.putheader("Host", "127.0.0.1:%d" % port)
+    conn.putheader("X-CG-Token", server.token)
+    conn.putheader("Content-Length", str(ui.BODY_LIMIT + 1))
+    conn.endheaders()
+    resp = conn.getresponse()
+    assert (resp.status, resp.read()) == (413, b'{"error": "body"}')
+    conn.close()
+    assert server.listing() == []
+
+
+def test_a_saved_entry_survives_in_the_list_next_to_live_ones(server):
+    live = scan_id(server, CLEAN)
+    status, saved = open_call(server, json.dumps(ui.report.scan(str(CLEAN))))
+    assert status == 200
+    again = scan_id(server, CLEAN)
+    rows = json.loads(call(server, "GET", "/api/scans")[1])
+    assert [r["id"] for r in rows] == [live, saved["id"], again]
+    assert [r.get("saved") for r in rows] == [None, True, None]
+    assert all(r["state"] == "done" for r in rows) and rows[1]["path"] == saved["report"]["path"]
+    assert json.loads(call(server, "GET", "/api/scan?id=" + saved["id"])[1])["saved"] is True
+
+
+def test_the_report_cap_also_drops_the_inventory(server, monkeypatch):
+    monkeypatch.setattr(ui, "REPORTS_KEPT", 2)
+    live = scan_id(server, CLEAN)
+    text = json.dumps(ui.report.scan(str(CLEAN)))
+    for _ in range(2):  # two saved checks push the live one out of the last two
+        assert open_call(server, text)[0] == 200
+    assert call(server, "GET", "/api/scan?id=" + live)[0] == 404
+    assert live not in server.inventories and live not in server.reports
+
+
+def test_open_refuses_what_scan_json_never_wrote(server):
+    assert open_call(server, "[1, 2]")[0] == 400
+    assert open_call(server, json.dumps({"findings": [], "scores": {}}))[0] == 400  # no grade, no path: not a report
+    status, js = open_call(server, json.dumps({"findings": [], "scores": {"overall": 1}, "path": 3}))
+    assert (status, js["error"]) == (400, "json")
+    assert server.listing() == []

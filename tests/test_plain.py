@@ -122,10 +122,29 @@ def test_score_sentence_refuses_an_unknown_dimension():
         plain.score_sentence("sideways", rep([]))
 
 
-def test_an_incomplete_scan_says_so_in_the_score_sentence():
-    partial = plain.score_sentence("safe", rep([], status="PARTIAL", reasons=["x"]))
-    assert "did not cover the whole project" in partial
-    assert "did not cover the whole project" not in plain.score_sentence("safe", rep([]))
+def test_an_incomplete_scan_says_so_once_on_the_overall_sentence():
+    r = rep([], status="PARTIAL", reasons=["x"])
+    overall = plain.score_sentence("overall", r)
+    # said by the cap reason, so the clause is left out (P76 S5): once either way
+    assert overall.count("PARTIAL") + overall.count("did not cover the whole project") == 1, overall
+    for d in ("safe", "works", "complete"):
+        assert "did not cover the whole project" not in plain.score_sentence(d, r), d
+    assert "did not cover the whole project" not in plain.score_sentence("overall", rep([]))
+
+
+def test_no_python_line_says_there_was_nothing_to_check():
+    r = rep([], status="PARTIAL", reasons=[NO_PYTHON_REASON], coverage=NO_PYTHON_COVERAGE)
+    py = [e for e in plain.checked_lines(r) if e["label"] == "Python"][0]
+    assert py["files"] == 0
+    assert py["text"] == "Python: 0 files — there was no Python here for the Safe and Works checks to read.", py
+
+
+def test_no_sentence_uses_an_ascii_double_dash():
+    for r in (rep([]), rep([f("secret.key", "FAIL", "a.py:1")], status="PARTIAL", reasons=["x"]),
+              rep([], files=dict(rep([])["files"], skipped=1, unparsed=1))):
+        texts = [plain.harm(r)["why"]] + [plain.score_sentence(d, r) for d in ("safe", "works", "complete", "overall")]
+        texts += [e["text"] for e in plain.checked_lines(r)]
+        assert not [t for t in texts if " -- " in t], texts
 
 
 # ---- C2, every branch ------------------------------------------------------------------------------------------
@@ -162,7 +181,7 @@ def test_harm_nothing_branch_on_a_report_with_zero_findings():
     assert h["partial"] is False
     assert "No Safe check reported anything" in h["why"]
     assert plain.checked_lines(r) == [{"label": "Python", "files": 3, "depth": "full",
-                                       "text": "Python: 3 files -- every Safe and Works check ran on these."}]
+                                       "text": "Python: 3 files — every Safe and Works check ran on these."}]
     assert plain.fix_first(r) == [] and plain.fix_first_notes(r) == []
 
 
@@ -218,13 +237,13 @@ def test_languages_names_every_extension_a_scan_can_report():
 def test_unknown_extension_falls_back_to_the_extension_itself():
     r = rep([], coverage=dict(FULL_COVERAGE, other_source={".zzq": 2}, other_source_files=2))
     entry = [e for e in plain.checked_lines(r) if e["label"] == ".zzq"]
-    assert len(entry) == 1 and entry[0]["files"] == 2 and entry[0]["text"].startswith(".zzq: 2 files -- ")
+    assert len(entry) == 1 and entry[0]["files"] == 2 and entry[0]["text"].startswith(".zzq: 2 files — ")
 
 
 def test_checked_lines_text_pluralises():
     one = rep([], coverage=dict(FULL_COVERAGE, python=1))
-    assert plain.checked_lines(one)[0]["text"].startswith("Python: 1 file -- ")
-    assert plain.checked_lines(rep([]))[0]["text"].startswith("Python: 3 files -- ")
+    assert plain.checked_lines(one)[0]["text"].startswith("Python: 1 file — ")
+    assert plain.checked_lines(rep([]))[0]["text"].startswith("Python: 3 files — ")
 
 
 # ---- C5 ---------------------------------------------------------------------------------------------------------
@@ -360,7 +379,7 @@ def test_item_5_python_entry_leaves_out_the_files_that_did_not_parse():
     assert rep_["coverage"]["python"] == 4 and rep_["files"]["unparsed"] == 1
     lines = {e["label"]: e for e in plain.checked_lines(rep_)}
     assert lines["Python"]["files"] == 3
-    assert lines["Python"]["text"].startswith("Python: 3 files -- ")
+    assert lines["Python"]["text"].startswith("Python: 3 files — ")
     assert lines["Python that did not parse"]["files"] == 1
     assert lines["Python that did not parse"]["depth"] == "secrets only"  # it was read, just not parsed
 
@@ -386,3 +405,173 @@ def test_item_6_adr_scopes_the_token_to_api_requests():
     body = (ROOT / "docs" / "adr" / "0007-plain-language-layer-never-scores.md").read_text(encoding="utf-8")
     assert "every request must carry the session token" not in body
     assert "/api/*" in body and "Host" in body and "Origin" in body
+
+
+# ---- P76 S5: before / after, and two copy items from the S3b review -----------------------------------------------
+
+def test_diff_sentence_reads_the_counts_and_both_grades():
+    before = rep([f("secret.key", "FAIL", "app.py:2"), f("exec.shell", "WARN", "app.py:9")])
+    after = rep([f("exec.shell", "WARN", "app.py:9"), f("net.egress", "WARN", "app.py:4")])
+    d = verify.diff(before, after)
+    s = plain.diff_sentence(d)
+    assert s == "1 fixed, 1 new, grade %s → %s" % (before["scores"]["grade"], after["scores"]["grade"])
+    invalid = rep([], status="INVALID", reasons=["nothing to judge"])
+    assert plain.diff_sentence(verify.diff(invalid, before)).endswith("grade none → %s" % before["scores"]["grade"])
+    assert not plain.VERDICT_PHRASES.search(s) and " -- " not in s
+
+
+def test_overall_on_a_partial_scan_says_partial_once(tmp_path):
+    (tmp_path / "index.js").write_text("console.log('hi')\n", encoding="utf-8")
+    (tmp_path / "package.json").write_text('{"name": "x", "version": "1.0.0"}', encoding="utf-8")
+    r = report.scan(str(tmp_path))
+    assert r["status"] == "PARTIAL" and "PARTIAL" in r["scores"]["cap_reason"]
+    s = plain.score_sentence("overall", r)
+    assert s.count("PARTIAL") == 1 and "did not cover the whole project" not in s, s
+    # a report without a cap reason (hand-made, or from an older version) still gets the clause, once
+    bare = copy.deepcopy(r)
+    bare["scores"]["cap_reason"] = None
+    assert plain.score_sentence("overall", bare).count("did not cover the whole project") == 1
+
+
+def test_fix_first_lead_comes_with_the_floor_note_and_only_then():
+    r = report.scan(str(ROOT / "tests" / "fixtures" / "risky_repo"))
+    kept = copy.deepcopy(r)
+    lead = plain.fix_first_lead(r)
+    assert any("0/100" in n for n in plain.fix_first_notes(r))
+    assert lead == ("Safety problems do not raise the grade until most of them are fixed, so they can show +0 here. "
+                    "Fix them first anyway.")
+    assert not plain.VERDICT_PHRASES.search(lead) and " -- " not in lead
+    assert r == kept
+    for name in ("clean_repo", "works_broken", "supply_repo"):
+        other = report.scan(str(ROOT / "tests" / "fixtures" / name))
+        assert (plain.fix_first_lead(other) is None) == (not any("0/100" in n for n in plain.fix_first_notes(other)))
+    assert plain.fix_first_lead(rep([], status="INVALID", reasons=["nothing to judge"])) is None
+
+
+# ---- P78 S3: file_rows, one honest label for every file the scan saw ---------------------------------------------
+
+def _inventory(python=(), manifests=(), other=(), skipped=()):
+    return {"python": list(python), "manifests": list(manifests), "other": list(other), "skipped": list(skipped),
+            "excluded": 0, "ignored": 0}
+
+
+def _by_rel(rows):
+    return {r["rel"]: r for r in rows}
+
+
+def test_file_rows_gives_one_row_per_distinct_file_sorted_by_rel():
+    inv = _inventory(python=["z.py", "setup.py", "a.py"], manifests=["setup.py", "requirements.txt"],
+                     other=["m.js"], skipped=[("b.bin", "binary")])
+    rows = plain.file_rows(rep([]), inv)
+    assert [r["rel"] for r in rows] == sorted({"z.py", "setup.py", "a.py", "requirements.txt", "m.js", "b.bin"})
+    assert [r["kind"] for r in rows if r["rel"] == "setup.py"] == ["python"], "setup.py is in two walk lists"
+    assert _by_rel(rows)["requirements.txt"]["kind"] == "manifest"
+    assert set(rows[0]) == {"rel", "kind", "why_not_read", "why_partly", "findings", "risk"}
+
+
+@pytest.mark.parametrize("why", ["binary", "symlink", "unreadable", "larger than 2000000 bytes"])
+def test_a_skipped_file_is_not_read_whatever_its_findings(why):
+    inv = _inventory(skipped=[("x.dat", why)])
+    for findings in ([], [f("secret.key", "FAIL", "x.dat:1")]):
+        row = plain.file_rows(rep(findings), inv)[0]
+        assert (row["kind"], row["risk"], row["why_not_read"], row["why_partly"]) == ("not_read", "Not read", why, None)
+
+
+def test_the_worst_safe_finding_sets_the_risk_and_the_counts_are_per_file():
+    r = rep([f("net.egress", "INFO", "a.py:1"), f("exec.shell", "WARN", "a.py:2"), f("net.egress", "INFO", "a.py:3"),
+             f("secret.key", "FAIL", "b.py:9"), f("tls.off", "WARN", "c.py")])
+    rows = _by_rel(plain.file_rows(r, _inventory(python=["a.py", "b.py", "c.py", "d.py"])))
+    assert (rows["a.py"]["risk"], rows["a.py"]["findings"]) == ("Medium", {"High": 0, "Medium": 1, "Low": 2, "Quality": 0})
+    assert rows["b.py"]["risk"] == "High" and rows["b.py"]["findings"]["High"] == 1
+    assert rows["c.py"]["risk"] == "Medium", "a bare file node counts too"
+    assert rows["d.py"] == {"rel": "d.py", "kind": "python", "why_not_read": None, "why_partly": None,
+                            "findings": {"High": 0, "Medium": 0, "Low": 0, "Quality": 0}, "risk": "No known risks found"}
+
+
+def test_a_failing_safe_finding_beats_lower_ones_in_any_order():
+    for order in ((("FAIL", 1), ("WARN", 2), ("INFO", 3)), (("INFO", 3), ("WARN", 2), ("FAIL", 1))):
+        r = rep([f("net.egress", level, "a.py:%d" % n) for level, n in order])
+        assert plain.file_rows(r, _inventory(python=["a.py"]))[0]["risk"] == "High"
+
+
+def test_other_dimensions_count_as_quality_and_never_change_the_risk_word():
+    r = rep([f("complete.readme_missing", "WARN", "a.py:1"), f("works.syntax", "FAIL", "b.py:1")])
+    rows = _by_rel(plain.file_rows(r, _inventory(python=["a.py", "b.py"], other=["c.txt"])))
+    assert rows["a.py"]["risk"] == "No known risks found" and rows["a.py"]["findings"]["Quality"] == 1
+    assert rows["b.py"]["findings"]["Quality"] == 1 and rows["b.py"]["risk"] == "Partly checked"
+
+
+def test_project_level_and_unknown_nodes_belong_to_no_row():
+    r = rep([f("complete.readme_missing", "WARN", "."), f("net.egress", "WARN", "elsewhere.py:3"),
+             f("net.egress", "WARN", "")])
+    rows = plain.file_rows(r, _inventory(python=["a.py"]))
+    assert [sum(row["findings"].values()) for row in rows] == [0]
+
+
+def test_a_python_file_that_did_not_parse_is_partly_checked_not_clean():
+    why = plain.WHY_PARTLY_UNPARSED
+    by_finding = rep([f("works.syntax", "FAIL", "pkg/c.py:1")])
+    by_reason = rep([], status="PARTIAL", reasons=["2 Python file(s) did not parse: pkg/c.py, pkg/d.py"])
+    inv = _inventory(python=["pkg/c.py", "pkg/d.py", "pkg/e.py"])
+    for r in (by_finding, by_reason):
+        rows = _by_rel(plain.file_rows(r, inv))
+        assert (rows["pkg/c.py"]["risk"], rows["pkg/c.py"]["why_partly"]) == ("Partly checked", why)
+        assert rows["pkg/e.py"]["risk"] == "No known risks found"
+    assert _by_rel(plain.file_rows(by_reason, inv))["pkg/d.py"]["risk"] == "Partly checked"
+
+
+def test_the_reason_names_are_matched_whole_and_the_and_more_tail_is_not_a_name():
+    r = rep([], status="PARTIAL", reasons=["7 Python file(s) did not parse: a.py, b.py and 5 more"])
+    rows = _by_rel(plain.file_rows(r, _inventory(python=["a.py", "b.py", "data.py", "more.py", "5 more"])))
+    assert [k for k, v in rows.items() if v["risk"] == "Partly checked"] == ["a.py", "b.py"]
+
+
+def test_a_file_in_another_language_is_partly_checked_and_names_the_language():
+    inv = _inventory(other=["web/app.JS", "main.go", "notes.txt", "Makefile", ".env", "dir.js/README"])
+    rows = _by_rel(plain.file_rows(rep([]), inv))
+    assert rows["web/app.JS"]["why_partly"].startswith("JavaScript code is not analysed yet")
+    assert rows["main.go"]["why_partly"].startswith("Go code is not analysed yet")
+    for name in ("notes.txt", "Makefile", ".env", "dir.js/README"):
+        assert rows[name]["why_partly"] == plain.WHY_PARTLY_NO_LANGUAGE, name
+    assert all(r["risk"] == "Partly checked" and r["kind"] == "other" for r in rows.values())
+
+
+def test_every_language_the_report_can_name_is_named_in_its_row():
+    for ext, language in plain.LANGUAGES.items():
+        row = plain.file_rows(rep([]), _inventory(other=["x" + ext]))[0]
+        assert row["why_partly"].startswith(language + " code"), ext
+
+
+def test_a_secret_in_another_language_is_still_high():
+    row = plain.file_rows(rep([f("secret.key", "FAIL", "index.js:1")]), _inventory(other=["index.js"]))[0]
+    assert (row["risk"], row["why_partly"]) == ("High", None)
+
+
+def test_manifests_and_parsed_python_may_say_no_known_risks_and_nothing_else_may():
+    inv = _inventory(python=["a.py"], manifests=["package.json"], other=["a.js"], skipped=[("a.bin", "binary")])
+    rows = _by_rel(plain.file_rows(rep([]), inv))
+    assert {k for k, v in rows.items() if v["risk"] == "No known risks found"} == {"a.py", "package.json"}
+
+
+def test_file_counts_come_from_the_rows_alone():
+    rows = plain.file_rows(rep([f("secret.key", "FAIL", "a.py:1"), f("complete.readme_missing", "WARN", "b.py")]),
+                           _inventory(python=["a.py", "b.py", "c.py"], other=["d.js"], skipped=[("e.bin", "binary")]))
+    assert plain.file_counts(rows) == {"all": 5, "with_findings": 2, "no_known_risks": 2, "partly_checked": 1,
+                                       "not_read": 1}
+    assert plain.file_counts([]) == {"all": 0, "with_findings": 0, "no_known_risks": 0, "partly_checked": 0,
+                                     "not_read": 0}
+
+
+def test_file_rows_over_every_fixture_never_calls_an_unread_file_clean(tmp_path):
+    from code_guardian import walk
+    roots = sorted(p for p in (ROOT / "tests" / "fixtures").iterdir() if p.is_dir())
+    assert roots
+    for root in roots:
+        scanned = report.scan(str(root))
+        rows = plain.file_rows(scanned, walk.walk(str(root)))
+        counts = plain.file_counts(rows)
+        for row in rows:
+            if row["kind"] in ("other", "not_read"):
+                assert row["risk"] in ("Partly checked", "Not read", "High", "Medium", "Low"), (root.name, row)
+        hml = sum(1 for row in rows if row["risk"] in ("High", "Medium", "Low"))
+        assert counts["no_known_risks"] + counts["partly_checked"] + counts["not_read"] == counts["all"] - hml

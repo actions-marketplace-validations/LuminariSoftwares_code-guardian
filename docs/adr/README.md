@@ -13,5 +13,7 @@ costs. Format: context, decision, alternatives, consequences.
 | [0005](0005-line-free-finding-fingerprints.md) | Finding fingerprints without line numbers | 0.3.0 |
 | [0006](0006-offline-known-packages-list.md) | An offline, hand-built package list; PyPI only on request | 0.2 |
 | [0007](0007-plain-language-layer-never-scores.md) | A plain-language layer that never scores | unreleased |
+| [0008](0008-settings-live-in-the-browser.md) | Settings live in the browser; dark is the default; the address is stable | unreleased |
+| [0009](0009-folder-dialog-refusals-reopen-loopback.md) | The folder window runs in a child process; some folders are refused; re-open never reads; loopback only | unreleased |
 
 A new record is added when a change alters one of these, or makes a choice of the same weight.

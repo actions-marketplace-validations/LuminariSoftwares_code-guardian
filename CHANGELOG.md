@@ -2,6 +2,69 @@
 
 ## Unreleased
 
+- **The app, v1.1 (P78).** Six changes to `code-guardian ui`, each said in plain words first and then in detail. The
+  README's [The app](README.md#the-app) section describes them for someone who uses AI to write code but does not
+  read code well.
+  - **Settings** (S1): you can choose a dark or light look, a larger text size and whether the Luminari name shows,
+    and the browser remembers the choice. A gear at the top of every screen opens a panel with three choices,
+    **Theme** (Dark or Light), **Text size** (Normal, Larger, Largest) and whether the Luminari name shows at the
+    top. They are kept by the browser itself (`localStorage`, one key), not in a file on the machine and not by the
+    server; the page never follows the system's light/dark setting, so dark stays the default and light is a choice.
+    Both palettes pass the contrast gate: `python tools/contrast_check.py code_guardian/ui/app.css` now checks every
+    palette and prints `ok: 88 pairs in 2 palettes`. The Luminari name is a plain link in the header with an empty
+    slot for its mark. So that the browser keeps the settings across restarts, the page now listens on a stable
+    address: with no `--port` it takes the first free port from 8765 to 8775, then any free port (`--port N` and
+    `--port 0` are unchanged). On Linux and macOS the listener sets `SO_REUSEADDR`, so a restart within a minute gets
+    the same port back instead of the next one; on Windows it stays off, where it would let another process take the
+    port. `ui.make_server()` takes `port=None` for the walk (`port=0` is still any free port). See
+    [ADR 0008](docs/adr/0008-settings-live-in-the-browser.md).
+  - **Sizes** (S2): every screen fits a phone, a narrow side window and a full or wide screen, at every text size,
+    with nothing cut off. Four width tiers (phone under 600 px, side window 600-899, full 900 and up, wide 1280 and
+    up); the summary rail is a one-line strip under 900 px (tap it for the harm label, Safe, Fix first and Check
+    again) and a column from 900 px that **Hide summary** shrinks to a slim icon rail (the choice is kept in
+    `localStorage["cg.rail"]`); the tabs are one row that scrolls sideways inside itself on a phone; on Code the file
+    list is a drawer under 900 px and, from 1280 px, the explain panel gets its own right-hand column; the Compare
+    pickers sit side by side from 900 px. Widths that hold text are `rem` or `clamp()` so they grow with the text
+    size. `tools/ui_screenshots.py` now also writes the 520 px shots and `rail_mini_1280x800.png`.
+  - **Every file** (S3): the Code screen lists every file the check saw, each with one honest word, and a file that
+    was not really read is never shown as having no known risks. A filter (**All files**, **Files with findings**,
+    **No known risks found**, **Partly checked**, **Not read**, each with its count) and a find box. Each file gets
+    one word: High, Medium or Low from its Safe findings; **No known risks found** only for a Python file that fully
+    parsed or a manifest; **Partly checked** for a source file in a language this tool does not analyse yet or a
+    Python file that did not parse (the row says which); **Not read** for a binary, a symlink, an unreadable or a
+    too-large file. New `GET /api/files?id=` and `plain.file_rows()`; the server walks the folder with the scan's own
+    goal-file excludes just before it scans, so the list is the files the scan saw. At most 2,000 rows are drawn at
+    once. Also: a quiet edge fade on the tab row when it scrolls, the picked file's name drawn once on a phone, the
+    two line fields on one line, and a code viewer of at least 34rem at 1280 px with the summary open.
+  - **Browse and the refusals** (S4): a **Browse…** button picks the folder with the computer's own folder window,
+    and folders too big to be one project (a whole drive, your home folder, Downloads and the like) are refused
+    before anything is read. The folder window is tkinter, in a child process, one at a time (new
+    `POST /api/browse`). A folder nobody should check as a whole (a drive, the home folder or a folder above it,
+    Downloads, Desktop, Documents, the OneDrive root, system folders) is refused with one plain sentence under the
+    field: for the folder Browse picks, a typed path (`POST /api/scan` answers `400 refused`) and
+    `code-guardian ui PATH` (exit 2). `code-guardian scan` is unchanged. A Python with no folder window hides Browse
+    for the session and says to paste the path. `code-guardian ui --port N` on a taken port now exits 2 with one
+    line instead of a traceback. See [ADR 0009](docs/adr/0009-folder-dialog-refusals-reopen-loopback.md).
+  - **Re-open vs Check again** (S5): opening the page again or picking an earlier check shows it from memory without
+    reading the folder again. Only **Check again**, the Open form, Browse and
+    `code-guardian ui PATH` read files (the button says so: "Reads the files again now"). New `GET /api/scan?id=`
+    (the stored result, with its file list) and `POST /api/open` with an **Open a saved check** button for a
+    `scan --json` file; a saved check has no folder behind it, so the Code screen says so and its file controls are
+    off, and Check again reads the folder it names only if it is still on this computer. The summary rail now reads
+    "Checked at" and the time in the browser's own format, such as "Checked at 02:05 PM" ("Saved check from PATH"
+    for a saved one). A report that leaves the last 20 now also drops its file list.
+  - **From a phone, and the README** (S6): the README's The app section now describes the five changes above, with
+    four screenshots, and how to look at the page from a phone. The phone section documents one way that works: an
+    SSH tunnel with the same port number on both ends (the port in the printed link, usually 8765), because the page
+    still listens only on 127.0.0.1 and answers only to `127.0.0.1` or `localhost` at its own port. Tailscale Serve,
+    and any other proxy that passes on its own address, is not supported yet: the page refuses it. Documentation
+    only; nothing in the code changed.
+- `code-guardian ui`, before / after (P76 S5): the Compare tab. Fix something, press **Check again**, open Compare: it shows one sentence first ("1 fixed, 0 new, grade D → B"), the score change per dimension, and three lists, **Fixed**, **New** and **Still there**, each item with its level word, title and where it is; a new High finding is marked "New High" in words as well as colour. You can pick any two checks of the session or load two files saved with `scan --json`; the files are read in the browser and compared by the local server, never uploaded. New `POST /api/diff` (two check ids, or the text of two saved reports; it returns `verify.diff` unchanged plus `sentence`) and `plain.diff_sentence()`; the server keeps the last 20 finished reports for comparing.
+- `plain.py` copy: on a PARTIAL scan the Overall sentence says "PARTIAL" once (the cap reason already says it, so the "did not cover the whole project" clause is left out); the Fix first notes get one plain sentence above them when Safe is at its floor ("Safety problems do not raise the grade until most of them are fixed, so they can show +0 here. Fix them first anyway."), and the scanner's note stays word for word under it (`/api/scan` carries it as `plain.fix_first_lead`).
+- `code-guardian ui`, select-to-explain (P76 S4): on the Code screen, drag some lines or type a start and an end line (at most 200; the two fields fill each other) and ask your own model what they do. Before anything is sent the panel says "These N lines go to your model at HOST:PORT (MODEL). Nothing else is sent." and waits for a confirmation; with no model configured it shows the one setup step instead and sends nothing. The answer sits under "AI explanation — may be wrong; does not change any score" and never changes a grade, a label or a finding. New `explain.excerpt()` and `POST /api/explain` (the model settings are read from the environment on each request); `scan --explain` and the MCP `explain` tool are unchanged and still send findings only. The note for a model that does not answer now leaves out any user:password in the URL.
+- `code-guardian ui`, the owner's first design reaction (P76 S3b): a summary rail on every tab (grade, how worried to be, Safe, how many fixes, finding counts) beside the screen on a wide window and as a strip under the tabs on a phone; a **Check again** button that re-scans the same folder on demand (never on a timer) and redraws every tab; the scan's own notes on its ranking above the Fix first list (such as "a Safe FAIL caps the grade at D"; `/api/scan` now carries `plain.fix_first_notes`); notes under flagged lines in the Code viewer open to the finding's why and what to do; "Go to line" sits on the file name's row. "No known risks found" is now a neutral grey (`--none`) with an outlined circle, never green: it is not an all clear.
+- `plain.py` copy: an em dash instead of ` -- `; the "from a scan that did not cover the whole project" clause is said once, on the Overall sentence, not on all four; a Python line with no files says there was no Python to check instead of "ran on these".
+
 - `code_guardian/plain.py`: a plain-language layer over a scan report -- a five-label harm level, one sentence per score, what was and was not checked, a card per finding and the fix-first list, in words for a reader who does not write code. It reads the report and changes nothing in it; the scores and findings are unchanged ([ADR 0007](docs/adr/0007-plain-language-layer-never-scores.md)).
 
 ## code-guardian 0.3.4 (2026-10-22)
