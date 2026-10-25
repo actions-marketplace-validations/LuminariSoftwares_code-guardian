@@ -24,7 +24,7 @@ from deterministic checks with fixed weights: same repo, same version, same outp
 
 It parses the code (`ast` for Python; `json`, `tomllib` and `configparser` for manifests; regular expressions for
 secrets) and never executes, imports or installs it. A scan makes
-no network calls. Python 3.11+, standard library only. Status: **0.3.4 is the current release.**
+no network calls. Python 3.11+, standard library only. Status: **0.4.0 is the current release.**
 
 **Who it is for.** Anyone running local AI models, or code an AI assistant wrote, on their own machine: you cloned a
 repository, or an assistant just rewrote a module, and you want a verdict before you run it. It is the fourth of four
@@ -90,7 +90,7 @@ code-guardian scan /home/user/project              # the grade, every finding wi
 code-guardian plan /home/user/project --top 3      # the three fixes worth the most Overall points
 ```
 
-Success looks like a first line `code-guardian 0.3.4  scan of <name>`, then a `status: COMPLETE` line and four score
+Success looks like a first line `code-guardian 0.4.0  scan of <name>`, then a `status: COMPLETE` line and four score
 lines. On a one-file project it takes well under a second. To give the same tools to an AI client, add the MCP server
 (see [MCP server](#mcp-server) for Claude Desktop and other clients):
 
@@ -172,6 +172,20 @@ made, in your browser's own time format ("Checked at 02:05 PM" on a US computer)
 runs only when you press it, never on a timer. **Save this check** (on the Summary screen) keeps a check as a file in your browser's
 Downloads folder, which **Open a saved check** shows again later and **Compare** can set against a newer one, all without reading the folder.
 
+### Backup copies
+
+AI-written projects collect copies: an `_archive/` folder, `old/`, `main.py.backup-20260824`. Their findings are real
+findings in files nobody runs, and they can bury the ones that matter. code-guardian never leaves a copy out on its
+own; leaving one out is something you choose. In the app, after a check, a banner says how many findings sit in
+folders that look like backup copies, with one button, **Check again without them**. A copy is offered only when it
+has findings and the code you keep does not import it. A copy that kept code imports, or that holds a risk that runs
+code (an install hook, an obfuscated payload, an `exec` risk), is not offered: it is listed under the banner with the
+reason in plain words. A copy that kept files only name in a string is offered with a caution line naming those
+files, because leaving a folder out only hides its findings and never breaks code. The new result then says **Left
+out at your request: …** with **Put them back**. When key-shaped values were graded as test values, the summary says
+how many, with a link to them. On the command line the same choice is `--exclude '_archive/*'`; the report says how
+many files that left out ("N left out at your request") and lists the glob under `excluded_by_request`.
+
 ### From a phone
 
 code-guardian ui only ever listens on 127.0.0.1 of the computer it runs on; it never opens a port to your network,
@@ -194,7 +208,7 @@ code-guardian scan risky_repo
 Real output:
 
 ```
-code-guardian 0.3.4  scan of risky_repo
+code-guardian 0.4.0  scan of risky_repo
 files: 7 Python, 3 manifests, 2 other (0 skipped, 0 excluded by the goal file)
 status: COMPLETE
 coverage: 7 Python analysed; 1 .js secret-scan only
@@ -443,6 +457,9 @@ is listed in the notes but does not make a scan PARTIAL.
   "findings": [{"code", "severity", "level", "node", "summary", "evidence", "try", "confidence", "fix",
                 "fingerprint", "new" (only with --baseline)}],
   "baseline": {"file", "version", "new", "known"}   (only with --baseline)
+  "excluded_by_request": [{"glob", "files"}]        (only with --exclude)
+  "test_values_graded": n                          (only when n > 0: secret.key findings at INFO because the value
+                                                    looks like a test value)
   "egress": [{"node", "level", "kind", "target"}],
   "hygiene": {"source", "goal", "entry_points", "keep", "findings", "counts", "notes"},
   "notes": [...],
@@ -462,8 +479,8 @@ the text and Markdown reports print the status and the coverage line above the s
 | code | what it looks for | level | weight |
 |---|---|---|---|
 | `secret.key` | API-key shapes (the privacy workflow's built-in list: `sk-` (which covers Anthropic's `sk-ant-`), `sk-or-`, `tvly-`, `ghp_`, `github_pat_`, `nvapi-`, `gsk_`, `AIza`; plus AWS access key IDs `AKIA`/`ASIA` + 16, Stripe `sk_live_`/`rk_live_`, Slack `xox[abprs]-`, Hugging Face `hf_` + 30 letters), a 40-character AWS secret key assigned to a name containing `aws` and `secret`, private-key blocks, `password = "<literal>"` (also `api_key`, `secret`, `access_token`…), and any `*_KEY` / `*_TOKEN` name holding a long, high-entropy literal. One finding per line. Values are never printed; values that call themselves fake (`mock`, `dummy`, `example`…) are skipped | FAIL | 40 |
-| `secret.key` | a Stripe test-mode key (`sk_test_`) | INFO | 0 |
-| `secret.history` | **opt-in, `scan --history`**: a key shape (the `secret.key` API-key shapes, AWS secret keys, private-key blocks) that a commit added and the file no longer has; it may still be valid. Names the short sha and the path, never the value | FAIL | 30 |
+| `secret.key` | a Stripe test-mode key (`sk_test_`), or a key-shaped value that looks like a test value: its body spells out a placeholder word (`fake`, `dummy`, `sample`, `mock`…), has at most 4 distinct characters, repeats one character 6 or more times in a row, or counts up (`12345678`, `abcdefgh`). The finding says why ("looks like a test value: …"); a key-shaped value on the same line that does not look like one stays FAIL. Private-key blocks are never graded this way | INFO | 0 |
+| `secret.history` | **opt-in, `scan --history`**: a key shape (the `secret.key` API-key shapes, AWS secret keys, private-key blocks) that a commit added and the file no longer has; it may still be valid. INFO (weight 0) when the value looks like a test value, with the reason in the evidence. Names the short sha and the path, never the value | FAIL | 30 |
 | `exec.dynamic` | `eval`, `exec`, `compile` on non-literal input; `__import__` with a variable | WARN | 10 |
 | `exec.dynamic` | …when `eval` or `exec` runs text from `input()`, `sys.argv`, request data, `os.environ` or a network read (the `exec.shell` taint rule, one function deep; `exec(compile(...))` counts at the `exec`): "runs code typed by the user" | FAIL | 30 |
 | `exec.shell` | `os.system`, `os.popen`, `subprocess.*(..., shell=True)` | WARN | 10 |
@@ -488,6 +505,28 @@ the text and Markdown reports print the status and the coverage line above the s
 
 The walk skips `.git`, `venv`/`.venv`, `node_modules`, `__pycache__`, `dist`, `build` and the tool caches, anything
 the root `.gitignore` matches (simple globs; `!` negation is ignored), binary files, files over 2 MB and symlinks.
+
+### Key-shaped values that say they are test values
+
+A key-shaped value is graded by what it says and by how it is used, never by where the file sits. The value itself
+decides first: a body that spells out a placeholder word, repeats one character or counts up is INFO (the
+`secret.key` row above). For a value that reads like a real key, the code around it can still say it is a test value:
+
+- **assigned to a fake-named variable** (`test_key`, `FAKE_TOKEN`, `sample_key=`; the name has a whole placeholder word
+  in it), and at least one more of: **in a test file**, **inside a test or fake function** (`test_x()`,
+  `_selftest()`), **compared in an assert**. Both together make it INFO, and the finding says why ("looks like a test
+  value: assigned to test_key and inside _selftest()").
+- **Anything else stays FAIL.** A test file alone, a function alone, an assert alone or a fake name alone never grade a
+  key: a real key pasted into `tests/test_live.py` is still leaked. If at least one of those signals is present the
+  finding names them ("test signals seen: in a test file, inside test_x(), compared in an assert") and gains one more
+  line in its fix list: *if this is a test value, make it say so (FAKE or TEST in the value, or one character
+  repeated, like 000000) and it is reported as information*.
+
+This reads Python files that parsed; other files are graded by the value alone. The limit is real: a real key put in a
+variable called `test_key` inside a test is reported at INFO, so rotate any key that ever sat in a file, whatever the
+grade says. The report's top-level `test_values_graded` counts the `secret.key` findings reported at INFO because the
+value looks like a test value (it is absent when there are none), and the text report prints the same sentence. See
+[ADR 0010](docs/adr/0010-test-values-are-graded-by-value-and-use.md).
 
 ### Secrets in the git history (opt-in)
 
@@ -618,6 +657,9 @@ code-guardian scan . --baseline code-guardian.baseline.json --fail-on WARN
 - **A baseline never hides the real grade.** The scores, the grade and every finding are computed and shown exactly
   as without one; only the exit code changes.
 - Same line twice counts twice: a third copy of a known line is new.
+- **Upgrading to 0.4.1:** a baseline recorded with 0.4.0 may hold `secret.key` findings that 0.4.1 reports at INFO
+  (the level is part of the fingerprint, so those lines count as new until the baseline is written again). Re-record
+  it: `code-guardian baseline .`, then commit the file.
 - SARIF results carry the fingerprint as `partialFingerprints["codeGuardian/v1"]` and `new` in their properties.
 
 ## Diff and repair plan
@@ -655,6 +697,16 @@ many points must go first.
 Every format is deterministic: no timestamps, no absolute paths. `--fail-on` works the same with each. The MCP
 `scan` tool keeps returning JSON.
 
+The options `scan` takes beside the format:
+
+| option | does |
+|---|---|
+| `--exclude GLOB` | leaves out the paths matching GLOB, relative to PATH (`'_archive/*'`); repeat it for more. Applied after the goal file's exclude list; the report says how many files it left out and under which glob. `baseline`, `plan` and `orphans` take it too |
+| `--goal FILE` | the [goal contract](#goal-contract) (default `PATH/code-guardian.goal.toml` if present) |
+| `--baseline FILE` | marks findings new or known; `--fail-on` then counts new ones only ([Baseline](#baseline-gate-on-new-findings-only)) |
+| `--history`, `--history-depth N` | also checks the lines git history added for key shapes ([history](#secrets-in-the-git-history-opt-in)) |
+| `--fail-on LEVEL` | exit 1 when any finding is at or above `INFO`, `WARN` or `FAIL` (default `FAIL`) |
+
 **GitHub Action** (`action.yml` in this repo, a composite action). It installs code-guardian from the action's own
 checkout, writes `code-guardian.sarif`, adds the Markdown report to the job summary (it opens with the status and
 the coverage line), uploads the SARIF to code scanning, and then fails the job when a finding is at or above
@@ -671,7 +723,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: LuminariSoftwares/code-guardian@v0.3.4
+      - uses: LuminariSoftwares/code-guardian@v0.4.0
         with:
           path: .
           fail-on: FAIL        # or WARN
@@ -687,7 +739,7 @@ environment variables, never by text substitution.
 ```yaml
 repos:
   - repo: https://github.com/LuminariSoftwares/code-guardian
-    rev: v0.3.4
+    rev: v0.4.0
     hooks:
       - id: code-guardian
         # args: [--fail-on, WARN]
@@ -978,7 +1030,7 @@ Every message in this table is a string the test suite pins, so it will not drif
 ```
 python -m pytest -q                                  # the whole suite (about 400 tests, 20-30 seconds)
 python -m code_guardian.scanners --selftest          # one module's built-in checks
-scanners selftest: 27 checks, 27 passed, 0 failed
+scanners selftest: 38 checks, 38 passed, 0 failed
 ```
 
 - **Fixture repos** (`tests/fixtures/`): a clean library, a risky repo that trips every Safe scanner (its key-shaped
