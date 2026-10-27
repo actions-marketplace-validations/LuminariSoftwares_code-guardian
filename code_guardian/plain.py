@@ -13,7 +13,7 @@ Public contract:
     LABELS, COULD_NOT_CHECK, VERDICT_PHRASES, LANGUAGES, WHY
     harm(report) -> {"level", "partial", "why", "counts": {"FAIL", "WARN", "INFO"}}
     score_sentence(dimension, report) -> str        # dimension: "safe" | "works" | "complete" | "overall"
-    checked_lines(report) -> [{"label", "files", "depth", "text"}]
+    checked_lines(report) -> [{"label", "files", "depth", "text"}]   # JavaScript entries also "looked_at", "not_looked_at"
     finding_card(finding, report=None) -> {"where", "what", "why", "how", "level", "confidence", "code",
                                            "fingerprint"}
     fix_first(report, top=10) -> [{"rank", "title", "level", "count", "gain", "grade_after", "first_location",
@@ -93,6 +93,9 @@ LANGUAGES = {
     ".r": "R",
     ".scala": "Scala",
     ".dart": "Dart",
+    ".vue": "Vue",
+    ".svelte": "Svelte",
+    ".astro": "Astro",
 }
 
 # One sentence per catalogue code, for a reader who does not write code: what the check saw, and why that can
@@ -129,6 +132,9 @@ WHY = {
     "install.hook":
         "This project runs code of its own while it is being installed, before you ever start it, so installing it "
         "is already running part of it.",
+    "dom.html_sink":
+        "This code puts text into the page as HTML. If that text comes from a visitor or a web address, it can run "
+        "as a script in another visitor's browser.",
     "obfuscation":
         "Something here is stored encoded instead of written out, and at the strongest level the code decodes it "
         "and runs it; either way you cannot tell by reading the file what the encoded part holds.",
@@ -396,6 +402,30 @@ OTHER_TEXT = ("read for key shapes, and where the file is a manifest for install
               "was not analysed")
 # Measured, not quoted: a skipped file is never opened. walk.py puts a file in files.skipped when it is binary, a
 # symlink, over the size limit or unreadable, and report.scan() secret-scans only inv["other"], never inv["skipped"].
+# JavaScript / TypeScript (P81 C6, S5b): read line by line, so two plain lists say what that reaches and what it does not.
+# "tokens" is the depth the page shows as "line by line". The generated line says what ran on minified or generated
+# files (report.JS_GENERATED_CHECKS: key shapes, obfuscation, exec.dynamic) and nothing more.
+JS_LABEL = "JavaScript / TypeScript"
+JS_LOOKED_AT = [
+    "what the code tells the computer to do, such as running a command, deleting a file or putting text on a web page",
+    "which other code and packages it pulls in",
+    "where it sends information, such as websites, servers and logs",
+    "how it starts: what runs by itself when it is installed, and whether the file it starts from is there",
+    "passwords, keys and hidden or scrambled text written into the files",
+]
+JS_NOT_LOOKED_AT = [
+    "how information travels from one part of the code to another, such as from a form a visitor fills in to a line "
+    "several steps later",
+    "whether each piece of data is the kind the code expects, such as a number where a number belongs",
+    "code that is written but never used",
+]
+JS_TEXT = "read line by line. Looked at: %s. Not looked at: %s" % ("; ".join(JS_LOOKED_AT), "; ".join(JS_NOT_LOOKED_AT))
+JS_GENERATED_LABEL = "JavaScript (minified or generated)"
+JS_GENERATED_LOOKED_AT = ["passwords and keys written into the files",
+                          "code that runs text as code, or unscrambles hidden text"]
+JS_GENERATED_NOT_LOOKED_AT = ["everything else"]
+JS_GENERATED_TEXT = "read only for two things. Looked at: %s. Not looked at: %s" % (
+    "; ".join(JS_GENERATED_LOOKED_AT), "; ".join(JS_GENERATED_NOT_LOOKED_AT))
 SKIPPED_TEXT = "not read at all, because they are binary, a symlink, too large or unreadable; the notes name each"
 # An unparsed file is read and secret-scanned (report.scan() scans the text before building the parse tree) and
 # only then fails to parse, so it is "secrets only", not "not read".
@@ -415,10 +445,24 @@ def checked_lines(rep):
     cov = _coverage(rep)
     files = rep.get("files") or {}
     unparsed = int(files.get("unparsed") or 0)
+    js = (cov.get("languages") or {}).get("javascript") or {}
+    js_files, js_generated = int(js.get("files") or 0), int(js.get("generated") or 0)
     # The files that did not parse get their own entry below; they are not files every check ran on.
     python = max(0, int(cov.get("python") or 0) - unparsed)
-    out.append({"label": "Python", "files": python, "depth": "full",
-                "text": "Python: %s \u2014 %s." % (_plural(python, "file"), _python_text(rep, leads, python))})
+    # No Python file but JavaScript / TypeScript analysed: the Safe and Works checks ran on that, so "there was no
+    # Python here for the Safe and Works checks to read" would be false. With neither, the Python line stays.
+    if int(cov.get("python") or 0) or not js_files:
+        out.append({"label": "Python", "files": python, "depth": "full",
+                    "text": "Python: %s \u2014 %s." % (_plural(python, "file"), _python_text(rep, leads, python))})
+    if js_files:
+        out.append({"label": JS_LABEL, "files": js_files, "depth": "tokens",
+                    "text": "%s: %s \u2014 %s." % (JS_LABEL, _plural(js_files, "file"), JS_TEXT),
+                    "looked_at": list(JS_LOOKED_AT), "not_looked_at": list(JS_NOT_LOOKED_AT)})
+    if js_generated:
+        out.append({"label": JS_GENERATED_LABEL, "files": js_generated, "depth": "tokens",
+                    "text": "%s: %s \u2014 %s." % (JS_GENERATED_LABEL, _plural(js_generated, "file"),
+                                                   JS_GENERATED_TEXT),
+                    "looked_at": list(JS_GENERATED_LOOKED_AT), "not_looked_at": list(JS_GENERATED_NOT_LOOKED_AT)})
     for ext, count in sorted((cov.get("other_source") or {}).items()):
         label = LANGUAGES.get(ext, ext)
         out.append({"label": label, "files": int(count), "depth": "secrets+manifests",
@@ -461,7 +505,7 @@ def finding_card(finding, rep=None):
         "where": finding.get("node"),
         "what": entry["title"] if entry else code,
         "why": WHY.get(code) or finding.get("summary") or "",
-        "how": finding.get("fix") or (entry or {}).get("fix"),
+        "how": finding.get("fix") or catalogue.fix_for(code, [finding.get("node")], catalogue.js_only(rep)),
         "level": finding.get("level"),
         "confidence": finding.get("confidence"),  # a labelled field, never a word inside a sentence
         "code": code,
@@ -529,6 +573,10 @@ FILE_LEVELS = (HIGH, MEDIUM, LOW, QUALITY)
 WHY_PARTLY_UNPARSED = "this file did not parse, so only the checks that need no parse tree ran"
 WHY_PARTLY_LANGUAGE = "%s code is not analysed yet; only key shapes were checked"
 WHY_PARTLY_NO_LANGUAGE = "this is not Python, so only key shapes were checked"
+WHY_PARTLY_JS_BROKEN = ("this file stopped tokenising at a break, so the code after the break was not analysed "
+                        "(the first line says where)")
+WHY_PARTLY_JS_GENERATED = ("this is minified or generated JavaScript, so it was read only for key shapes and for "
+                           "code that runs text or decodes hidden text")
 _AND_MORE = re.compile(r" and \d+ more$")
 
 
@@ -559,8 +607,10 @@ def file_rows(rep, inventory):
     walk.walk()'s result for the same scan. A file is labelled, in this order:
       Not read        walk put it in skipped (binary, symlink, unreadable, too large), whatever the findings say
       High/Medium/Low its worst Safe finding (FAIL, WARN, INFO); findings of any other check count as Quality
-      Partly checked  a source file in a language this tool does not analyse, or a Python file that did not parse
-      No known risks found  a Python file that fully parsed, or a manifest
+      Partly checked  a source file in a language this tool does not analyse, a Python file that did not parse,
+                      a JavaScript / TypeScript file that stopped tokenising, or a minified or generated one
+      No known risks found  a Python file that fully parsed, a JavaScript / TypeScript file that was analysed, or a
+                      manifest
     A file the tool did not really read is never labelled "No known risks found"."""
     skipped = dict(inventory.get("skipped") or [])
     python, manifests = set(inventory.get("python") or []), set(inventory.get("manifests") or [])
@@ -579,6 +629,7 @@ def file_rows(rep, inventory):
         else:
             counts[rel][QUALITY] += 1
     unparsed = _unparsed_names(rep)
+    javascript, generated = set(inventory.get("javascript") or []), set(inventory.get("generated") or [])
     rows = []
     for rel in sorted(known):
         kind = ("not_read" if rel in skipped else "python" if rel in python
@@ -589,6 +640,13 @@ def file_rows(rep, inventory):
             risk = NOT_READ
         elif rel in worst:
             risk = worst[rel]
+        elif kind == "other" and rel in generated:
+            risk, why_partly = PARTLY_CHECKED, WHY_PARTLY_JS_GENERATED
+        elif kind == "other" and rel in javascript:
+            if rel in unparsed:
+                risk, why_partly = PARTLY_CHECKED, WHY_PARTLY_JS_BROKEN
+            else:
+                risk = NONE_FOUND
         elif kind == "other":
             risk = PARTLY_CHECKED
             stem, dot, ext = rel.rsplit("/", 1)[-1].rpartition(".")

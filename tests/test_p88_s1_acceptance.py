@@ -48,18 +48,17 @@ ROOT = HERE.parent
 FIXTURES = HERE / "fixtures"
 sys.path.insert(0, str(HERE))
 
-BEFORE_DIGESTS = {  # recorded on main 2026-10-24
-    "clean_repo": "2c6608064288e0874d9e5a9896e951d94507c479b3ea41ebcb51e5753755abf5",
-    "complete_app": "c3639ad0b7d0471c67cd1571086db965840a7e17e2c2119b2c593f0805a33976",
-    "complete_bare": "e0f2d0eca2221218aee3f144d3cf0c0a780ba20af6a5123b7fce2c7e1f62099c",
-    "orphan_repo": "a54e038d7697bf60a88a30448c6b7dca01db016243290891cdc508b18493124a",
-    "risky_repo": "7f9d7de5187f2616610b5eb6ccfa1f63c63506c6e899d6224ec58a7f16911e9d",
-    "supply_repo": "9da8e6f98f82ef10b9d0885a3d84a37f48367266ca1c52f34709f829e1d30b4f",
-    "works_broken": "67f5ea32ab8566352fe9fccb356ed24cd2234cdfc3bb5bf8491bf9d397c26088",
-    "works_weak_tests": "e414d5a2fc2f65907ee3099e53b55e8aa170f164626620442376b503cf09486e",
+BEFORE_DIGESTS = {  # recorded on main 2026-10-24; re-recorded without "weights" on bf5e31e 2026-10-25 (P81 S2)
+    "clean_repo": "5c1a5965f2978f22af70474f0ab81b264d48f2113c7af86fbbe9a2607a19f8d1",
+    "complete_app": "4df1c2aa227cb223da14ff578a9a25005f8ab7c10e0c14a66dfe86bb467704d7",
+    "complete_bare": "0fac84bb829c27cd90e3a45881ed17dd849012652422372483276ab7b0d65f9d",
+    "orphan_repo": "d6d039fcb3b799626752c926cf048bc8af27dec17a4d8a808de98872bb81f69f",
+    "supply_repo": "3574a3faaef76c5b18653cfb334785e8d6770859723bfb64e75fceb9c7eb0724",
+    "works_broken": "ffb102455fc0e66f933fe52699079cdeed8227a950b991e89e49d7851e2ccd8f",
+    "works_weak_tests": "15b979c7fc9c8a1554508bf6711512c2394a45030c8e88fc70a3c03d9ae32846",
 }
 if os.name == "nt":  # a CRLF checkout: complete_bare's README byte count differs (17 vs 14); recorded on Windows too
-    BEFORE_DIGESTS["complete_bare"] = "361ae31b95a7ad5a590db4d8c320a041a135cb1df0e52d7243a919083d3c6272"
+    BEFORE_DIGESTS["complete_bare"] = "aaebf8aaecbb12bb0b521dd1eef40c334d802e9a760accaa25c43e23be153657"
 # sha256 of code_guardian/scanners.py on main (0.4.0), line endings normalised to \n: S1 must not touch it.
 SCANNERS_SHA256_MAIN = "92f26b655e02e53348c50ebfeec9ae95ff36168ed4f34e52802815d0a0cc98b3"
 COUNT_LINE = re.compile(r"(\d+) checks, (\d+) passed")
@@ -71,6 +70,11 @@ def canon(rep):
     d = json.loads(json.dumps(rep))
     d.pop("version", None)
     d.pop("path", None)
+    d.pop("weights", None)  # P81 S2 adds weight rows; test_golden excludes weights the same way
+    d.pop("schema_version", None)  # P81 S4 bumps it; the additive keys below are test_golden's
+    d.get("files", {}).pop("javascript", None)
+    d.get("files", {}).pop("generated", None)
+    d.get("coverage", {}).pop("languages", None)
     return json.dumps(d, sort_keys=True, indent=1)
 
 

@@ -421,7 +421,7 @@ def test_diff_sentence_reads_the_counts_and_both_grades():
 
 
 def test_overall_on_a_partial_scan_says_partial_once(tmp_path):
-    (tmp_path / "index.js").write_text("console.log('hi')\n", encoding="utf-8")
+    (tmp_path / "main.go").write_text("package main\n", encoding="utf-8")  # Go: only secret-scanned (JavaScript is analysed)
     (tmp_path / "package.json").write_text('{"name": "x", "version": "1.0.0"}', encoding="utf-8")
     r = report.scan(str(tmp_path))
     assert r["status"] == "PARTIAL" and "PARTIAL" in r["scores"]["cap_reason"]
@@ -568,10 +568,12 @@ def test_file_rows_over_every_fixture_never_calls_an_unread_file_clean(tmp_path)
     assert roots
     for root in roots:
         scanned = report.scan(str(root))
-        rows = plain.file_rows(scanned, walk.walk(str(root)))
+        inventory = walk.walk(str(root))
+        rows = plain.file_rows(scanned, inventory)
         counts = plain.file_counts(rows)
+        analysed_js = set(inventory["javascript"])  # JavaScript / TypeScript is analysed at token level since P81 S5
         for row in rows:
-            if row["kind"] in ("other", "not_read"):
+            if row["kind"] == "not_read" or (row["kind"] == "other" and row["rel"] not in analysed_js):
                 assert row["risk"] in ("Partly checked", "Not read", "High", "Medium", "Low"), (root.name, row)
         hml = sum(1 for row in rows if row["risk"] in ("High", "Medium", "Low"))
         assert counts["no_known_risks"] + counts["partly_checked"] + counts["not_read"] == counts["all"] - hml
@@ -625,3 +627,14 @@ def test_the_p88_sentences_make_no_promise():
                      [{"glob": "old/*", "why": "app/main.py imports it"}])[0],
                  plain.named_line({"glob": "old/*", "named_by": ["a.py"]})]
     assert not [s for s in sentences if plain.VERDICT_PHRASES.search(s)]
+
+
+def test_finding_card_picks_the_advice_for_the_file_language():
+    from code_guardian import catalogue
+    js = {"code": "exec.shell", "node": "src/run.js:4", "level": "WARN"}
+    py = {"code": "exec.shell", "node": "run.py:4", "level": "WARN"}
+    own = {"code": "exec.shell", "node": "src/run.js:4", "level": "WARN", "fix": "its own words"}
+    assert plain.finding_card(js, {})["how"] == catalogue.FIX_JS["exec.shell"]
+    assert plain.finding_card(py, {})["how"] == catalogue.CATALOGUE["exec.shell"]["fix"]
+    assert plain.finding_card(own, {})["how"] == "its own words"
+    assert plain.finding_card({"code": "zz.nope", "node": "a.js:1"}, {})["how"] is None
