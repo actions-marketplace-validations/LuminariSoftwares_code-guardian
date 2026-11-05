@@ -62,6 +62,12 @@ SAFE_WEIGHTS = {  # the v0.1 threat weights, unchanged
     ("privacy.pii_prompt", "WARN"): 5,
     ("dom.html_sink", "WARN"): 10,
     ("dom.html_sink", "FAIL"): 30,
+    ("safe.agent_hook_runs_command", "WARN"): 5,
+    ("safe.agent_auto_approve", "FAIL"): 15,
+    ("safe.agent_pipe_to_shell", "FAIL"): 15,
+    ("safe.agent_mcp_unpinned", "WARN"): 5,
+    ("safe.agent_injection_text", "WARN"): 5,
+    ("safe.agent_hidden_unicode", "FAIL"): 15,
 }
 WORKS_WEIGHTS = {
     ("works.syntax", "FAIL"): 30,
@@ -70,6 +76,9 @@ WORKS_WEIGHTS = {
     ("works.relative_missing", "FAIL"): 25,
     ("works.tests_missing", "WARN"): 15,
     ("works.test_no_assert", "WARN"): 5,
+    ("works.test_hollow", "WARN"): 5,
+    ("works.layer_import", "WARN"): 5,
+    ("works.file_too_long", "WARN"): 5,
     ("works.entry_missing", "FAIL"): 30,
     ("orphan.dead", "WARN"): 3,  # from the hygiene section; only when entry points exist (contract or inferred)
     ("works.todo_stub", "WARN"): 3,  # AI leftovers (leftovers.py)

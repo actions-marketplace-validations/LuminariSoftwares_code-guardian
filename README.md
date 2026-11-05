@@ -26,7 +26,7 @@ from deterministic checks with fixed weights: same repo, same version, same outp
 
 It parses the code (`ast` for Python; a small lexer for JavaScript and TypeScript; `json`, `tomllib` and
 `configparser` for manifests; regular expressions for secrets) and never executes, imports or installs it. A scan makes
-no network calls. Python 3.11+, standard library only. Status: **0.5.0 is the current release.**
+no network calls. Python 3.11+, standard library only. Status: **0.6.0 is the current release.**
 
 **Who it is for.** Anyone running local AI models, or code an AI assistant wrote, on their own machine: you cloned a
 repository, or an assistant just rewrote a module, and you want a verdict before you run it. It is the fourth of four
@@ -114,7 +114,7 @@ code-guardian scan /home/user/project              # the grade, every finding wi
 code-guardian plan /home/user/project --top 3      # the three fixes worth the most Overall points
 ```
 
-Success looks like a first line `code-guardian 0.5.0  scan of <name>`, then a `status: COMPLETE` line and four score
+Success looks like a first line `code-guardian 0.6.0  scan of <name>`, then a `status: COMPLETE` line and four score
 lines. On a one-file project it takes well under a second. To give the same tools to an AI client, add the MCP server
 (see [MCP server](#mcp-server) for Claude Desktop and other clients):
 
@@ -301,8 +301,8 @@ weights used (each check (code + level) deducts its weight once, plus a quarter 
            supply.unknown_package INFO 0 · supply.unknown_package WARN 10 · tls.off FAIL 25 · tls.off WARN 10
   Works    orphan.dead WARN 3 · works.commented_code INFO 0 · works.dead_flag INFO 0 ·
            works.entry_missing FAIL 30 · works.import_unresolved WARN 10 · works.relative_missing FAIL 25 ·
-           works.syntax FAIL 30 · works.syntax INFO 0 · works.test_no_assert WARN 5 ·
-           works.tests_missing WARN 15 · works.todo_stub WARN 3
+           works.syntax FAIL 30 · works.syntax INFO 0 · works.test_hollow WARN 5 ·
+           works.test_no_assert WARN 5 · works.tests_missing WARN 15 · works.todo_stub WARN 3
   Complete complete.ci_missing WARN 10 · complete.env_example WARN 10 · complete.license_missing WARN 20 ·
            complete.license_undeclared WARN 5 · complete.lockfile WARN 10 · complete.metadata WARN 10 ·
            complete.readme_missing WARN 20 · complete.readme_sections WARN 5 · complete.readme_short WARN 10 ·
@@ -541,6 +541,12 @@ the text and Markdown reports print the status and the coverage line above the s
 | `dom.html_sink` | JavaScript / TypeScript only: a value that is not a literal reaches `.innerHTML` / `.outerHTML` (`=` or `+=`), `insertAdjacentHTML(`, `document.write(` / `writeln(`, React's `dangerouslySetInnerHTML`, jQuery's `$(...).html(v)` or one of Angular's `bypassSecurityTrustHtml` / `Script` / `ResourceUrl` / `Url` calls | WARN | 10 |
 | `dom.html_sink` | …when the value is read from a request, the address bar (`location.hash`, `window.location.search`), `document.cookie` or `window.name` (the same one-statement taint rule as `exec.shell`): the Juice Shop XSS sites | FAIL | 30 |
 | `deps.unpinned` | dependencies with no pin or upper bound (`pyproject.toml`, `setup.py`, `setup.cfg`, `requirements*.txt`, `package.json`) | INFO | 0 |
+| `safe.agent_hook_runs_command` | a `hooks` entry with a `command` in `.claude/settings.json` or `.claude/settings.local.json` | WARN | 5 |
+| `safe.agent_auto_approve` | `skipPermissions` or `dangerouslySkipPermissions` switched on, or `permissions.allow` holding `Bash(*)` or `*` | FAIL | 15 |
+| `safe.agent_pipe_to_shell` | a `curl` or `wget` fetch piped into `sh` or `bash` in a hook command or an agent instruction file | FAIL | 15 |
+| `safe.agent_mcp_unpinned` | an MCP server in `.mcp.json` or `.cursor/mcp.json` launched by `npx`, `uvx` or `pipx run` with no `@<version>` or `==`; one finding per server, none for a server with a version fixed | WARN | 5 |
+| `safe.agent_injection_text` | a line of an agent instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.cursor/rules*`) matching an `injection.*` pattern in `code_guardian/data/injection_patterns.json`; the finding names the pattern, not the text | WARN | 5 |
+| `safe.agent_hidden_unicode` | a zero-width, direction-control or tag character (the `injection.hidden_unicode` class) in any of those files | FAIL | 15 |
 
 Every Safe code above except `privacy.pii_prompt` also runs on JavaScript and TypeScript, at the same levels and
 weights; the rows marked JavaScript / TypeScript only say what is specific to them. The sinks are read off tokens, one
@@ -550,6 +556,17 @@ expression is never a sink. `dom.html_sink` is JavaScript / TypeScript only.
 `net.egress` targets that stay in the inventory at INFO: https to a named host, loopback, the local network
 (non-global addresses such as 10/8, 192.168/16 and 100.64/10, single-label names like `gpu-box`, `.local`, `.lan`,
 `.internal`, `.home.arpa`) and reserved documentation names (`example.com`, `.test`, `.invalid`).
+
+**Shipped agent configs.** A repository can carry files that steer an AI coding agent, and whoever opens an agent in
+the folder inherits them. When any of `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`,
+`.cursor/mcp.json`, `.cursor/rules*`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` or `.github/copilot-instructions.md` sits at
+the root, code-guardian reads it (as text; no hook, server or package manager is ever run) and reports the six
+`safe.agent_*` codes above, which keep their level inside `.md` files. The files it read are listed in
+`coverage.agent_configs`, and the check shows as the `agents` row of the outcomes; a repository with none of those
+files gets no key, no row and no finding. The injection wording and the invisible-character class come from
+`code_guardian/data/injection_patterns.json`, a copy of tool-guardian's poison-pattern list. The idea comes from
+MCP and agent security scanners reviewed on Glama (for example invariantlabs-ai/mcp-scan); this code is rewritten
+from the idea.
 
 The walk skips `.git`, `venv`/`.venv`, `node_modules`, `__pycache__`, `dist`, `build` and the tool caches, anything
 the root `.gitignore` matches (simple globs; `!` negation is ignored), binary files, files over 2 MB and symlinks.
@@ -629,6 +646,9 @@ or running anything.
 | `works.relative_missing` | a relative import (`from .x import y`) that points at a module the repo does not have | FAIL | 25 |
 | `works.tests_missing` | no test files at all (`tests/`, `test_*.py`, `*_test.py`, `tests.py`, `conftest.py`) | WARN | 15 |
 | `works.test_no_assert` | test functions with no `assert`, no `pytest.raises`/`warns`, no `self.assert*` and no call to a local helper that asserts; once per file, with the count | WARN | 5 |
+| `works.test_hollow` | test functions that do assert but cannot fail: a tautology (`assert True`, `assert 1`, `assert x == x`, `assertTrue(True)`), assertions only on a mock the test built, or an `except: pass` / `except Exception: pass` that swallows the failure; one kind per test, a test already reported by `works.test_no_assert` is left to it; once per file, with the counts by kind | WARN | 5 |
+| `works.layer_import` | a file under a `[[layers]]` path in the goal file imports a module prefix that layer forbids (`flask` matches `flask` and `flask.x`, not `flasky`); node is `file:line` | WARN | 5 |
+| `works.file_too_long` | a file matching a `[size_limits]` glob has more lines than its limit; nothing is reported without a declaration | WARN | 5 |
 | `works.entry_missing` | a `[project.scripts]` (or `setup.cfg` console script) target `module:function` whose module or function is not in the tree | FAIL | 30 |
 | `orphan.dead` | dead code from the hygiene section (below), folded in at a low weight, only when entry points exist | WARN | 3 |
 | `works.todo_stub` | a function whose body is only `pass`, `...` or `raise NotImplementedError` (a docstring allowed) **and** an entry point reaches it; not abstract methods, `Protocol` classes, `@overload` or a method a subclass in the repo overrides | WARN | 3 |
@@ -652,7 +672,7 @@ JSON with comments and trailing commas allowed). Same weights as above:
 
 `works.tests_missing` is reported once for the repository: when there are Python files the Python check reports it,
 and it is dropped when the JavaScript side has a test file or a `scripts.test` that is not npm's placeholder. Generated
-files get no Works check. Not checked on JavaScript / TypeScript: `works.test_no_assert`, `works.todo_stub`,
+files get no Works check. Not checked on JavaScript / TypeScript: `works.test_no_assert`, `works.test_hollow`, `works.todo_stub`,
 `works.commented_code`, `works.dead_flag` and orphan (dead) code.
 
 How `works.import_unresolved` decides (Python):
@@ -792,7 +812,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: LuminariSoftwares/code-guardian@v0.5.0
+      - uses: LuminariSoftwares/code-guardian@v0.6.0
         with:
           path: .
           fail-on: FAIL        # or WARN
@@ -808,7 +828,7 @@ environment variables, never by text substitution.
 ```yaml
 repos:
   - repo: https://github.com/LuminariSoftwares/code-guardian
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: code-guardian
         # args: [--fail-on, WARN]
@@ -846,6 +866,12 @@ above. Two rules apply across Safe:
 | `net.bind_all` | Safe | A server binds 0.0.0.0 or ::, so other machines can reach it. | Bind to 127.0.0.1 unless other machines must connect. | Containers usually must bind 0.0.0.0; a test that asserts the bind is refused still matches. |
 | `net.egress` | Safe | The egress inventory: every URL and IP literal and every network call site. WARN for a public IP, or plain http/ws/ftp to a public name or to a host set at runtime. | Use https, and confirm each destination is expected. | Local-network and documentation hosts stay INFO; a URL in a help string is still inventoried. |
 | `obfuscation` | Safe | exec/eval of base64, zlib, marshal or hex-decoded data (FAIL); long encoded blobs or high-entropy literals (WARN). | Decode the payload offline and read what it does before running anything. | Embedded icons, test vectors and hashes can look like blobs. |
+| `safe.agent_hook_runs_command` | Safe | An agent settings file has a hook that runs a shell command whenever the agent does something, on the machine of everyone who opens the project in that agent. | Read the command and keep it only if every collaborator should run it; otherwise delete the hook. | A formatter or linter hook the team wants on purpose; the finding says the command exists, not that it is harmful. |
+| `safe.agent_auto_approve` | Safe | A shipped agent setting turns off the agent's permission prompts, or allows any shell command or any tool without asking, so whatever text the agent reads can act on this machine unchecked. | Remove the setting so the agent asks first, and allow only exact commands the project needs, such as Bash(npm test). | A throwaway sandbox or container where the agent is meant to run unattended; keep that setting out of the shared file. |
+| `safe.agent_pipe_to_shell` | Safe | A hook or instruction file tells the agent, or the machine, to fetch a script from the network and run it in the same step, so nobody reads it before it runs. | Download the script, read it, check it against a published checksum, then run it. | A well-known installer line quoted in a note as an example; the finding cannot tell a quotation from an instruction. |
+| `safe.agent_mcp_unpinned` | Safe | An MCP server is started with npx, uvx or pipx run and no fixed version, so every start can fetch new code from the package registry and run it with the agent's access. | Name an exact version, such as example-mcp-server@1.2.3 for npx or example-mcp-server==1.2.3 for uvx and pipx. | A package you publish yourself and want to track; a local path or a server reached by URL is not reported. |
+| `safe.agent_injection_text` | Safe | An agent instruction file contains wording of the kind used to hijack an agent: dropping its earlier instructions, hiding actions from the user, reading credential files or sending data to an address. | Read the line and delete it unless you wrote it and want the agent to follow it. | Security notes and tests that quote such wording on purpose, and honest rules like never reveal the user's password in a log. |
+| `safe.agent_hidden_unicode` | Safe | A shipped agent file contains zero-width, direction-control or tag characters that a person cannot see but the agent reads, which is how instructions get hidden in a file that looks harmless. | Delete the invisible characters, or open the file in an editor that shows them. | A zero-width joiner inside an emoji sequence, or a byte-order mark that is not at the start of the file. |
 | `secret.history` | Safe | With scan --history: a key shape (the secret.key API-key shapes, AWS secret keys, private-key blocks) was added by a commit and is no longer in that file. Anyone with a clone can still read it, and it may still be valid. The finding names the short sha and the path, never the value. | Rotate the key now; deleting it does not remove it from history. Then consider git filter-repo. | Keys that were revoked long ago, and test keys committed on purpose; a key still in the file is secret.key. |
 | `secret.key` | Safe | An API-key shape (OpenAI-style sk-, GitHub, Google, AWS, Stripe live, Slack, Hugging Face and others), an AWS secret key, a private-key block, a password-like literal or a high-entropy literal in a name ending _KEY or _TOKEN is written into a file (a Stripe test key is INFO). | Move it to an environment variable or a secret store, and rotate it: it is in the history. | Test fixtures and documentation samples; values that call themselves fake (mock, dummy, example) are skipped. |
 | `privacy.pii_log` | Safe | A name for personal data (email, phone, ssn, dob/birth, a person's address, passport, credit card or card number, iban, ip address) flows into logging.*, a logger method or print, directly or through a variable in the same function. | Log an id or a masked value instead; logs are copied and kept far longer than the data. | Names that only look personal (a count of emails is named emails_n, not email); taint is one function deep. |
@@ -864,6 +890,9 @@ above. Two rules apply across Safe:
 | `works.dead_flag` | Works | A module-level ALL_CAPS boolean constant (DEBUG = False) that no file reads, imports or names. | Delete it, or wire it to the code it was meant to switch. | Flags read only by another tool or by string name; INFO, never scored. |
 | `works.syntax` | Works | ast.parse rejects the file, so it cannot be imported or run (INFO when the project needs a newer Python than the one scanning); in JavaScript or TypeScript, a template literal or block comment that never closes. | Fix the syntax error; port Python 2 code to Python 3. | Files kept on purpose for another interpreter, or templates with a .py name. |
 | `works.test_no_assert` | Works | Test functions with no assert, no pytest.raises/warns, no self.assert* and no call to an asserting helper. | Assert on the result; use pytest.raises for expected errors. | Smoke tests that only check nothing raises; helpers defined in another file. |
+| `works.test_hollow` | Works | Test functions whose assertions are vacuous: assert True, assert 1, assert x == x or assertTrue(True); assertions only on a mock the test built; or an except: pass / except Exception: pass that swallows the failure. | Assert on a value the code under test returns; let the exception fail the test or use pytest.raises. | A mock call count that is the behaviour under test; an except Exception: pass around cleanup. |
+| `works.layer_import` | Works | A file under a [[layers]] path in the goal file imports a module prefix that layer lists in forbidden_imports. | Move the call behind a module the layer may import, or update forbidden_imports if the rule is out of date. | A rule written too broadly; an import kept on purpose in one adapter file (narrow the layer path). |
+| `works.file_too_long` | Works | A file matching a [size_limits] glob in the goal file has more lines than the limit. | Split the file by responsibility, or raise the limit in the goal file if the size is intended. | A file that is long on purpose (a table or generated data); raise its limit. |
 | `works.tests_missing` | Works | There are no test files at all (for JavaScript or TypeScript: no test file and no scripts.test). | Add a tests/ folder with at least one test per entry point. | Tests kept in another repository. |
 | `complete.ci_missing` | Complete | No CI configuration was found. | Add a CI workflow that runs the tests on each change. | CI configured outside the repository. |
 | `complete.env_example` | Complete | The code reads environment variables but there is no .env.example listing them. | Add a .env.example with every variable and a safe placeholder. | Libraries that read only optional, well-known variables (NO_COLOR, TERM). |
@@ -885,7 +914,19 @@ goal = "One sentence: what this project is for."
 entry_points = ["pkg.cli:main", "pkg.server:app"]   # module:function, or module:__main__ for its main block
 keep = ["pkg.plugins.*"]                             # loaded dynamically; never reported
 exclude = ["tests/fixtures/*"]                       # path globs the scan skips (the report counts them)
+
+[[layers]]                                           # files under `path` may not import these module prefixes
+path = "svc/*"
+forbidden_imports = ["flask"]
+
+[size_limits]                                        # a path glob and the most lines a matching file may have
+"svc/web.py" = 300
 ```
+
+`[[layers]]` (repeatable) and `[size_limits]` are optional; without them nothing extra is checked. A forbidden prefix
+`flask` matches `flask` and `flask.x`, not `flasky`. A bad shape (a limit that is not a positive whole number, a layer
+without a string `path`, `forbidden_imports` that is not a list of strings) stops the scan with an error naming the key.
+Breaches are reported as `works.layer_import` and `works.file_too_long` (WARN, 5 points each).
 
 ```
 code-guardian init            # writes a starter file with the inferred entry points; --force replaces one
