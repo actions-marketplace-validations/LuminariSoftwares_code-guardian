@@ -14,6 +14,8 @@ mcp-name: io.github.LuminariSoftwares/code-guardian
 
 A deterministic A-F grade for any repo -- is it safe to run, will it work, is it complete -- for people about to run code they did not write.
 
+https://github.com/user-attachments/assets/d5a90947-fac6-477b-81ad-10458ac652ce
+
 ## Quick start (60 seconds)
 
 From a clean Python 3.11+ environment (no other dependencies):
