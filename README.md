@@ -1,5 +1,7 @@
 # code-guardian
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/brand/luminari-softwares-horizontal-dark.svg"><img src="docs/brand/luminari-softwares-horizontal-light.svg" alt="Luminari Softwares" height="40"></picture>
+
 [![ci](https://github.com/LuminariSoftwares/code-guardian/actions/workflows/ci.yml/badge.svg)](https://github.com/LuminariSoftwares/code-guardian/actions/workflows/ci.yml)
 [![privacy](https://github.com/LuminariSoftwares/code-guardian/actions/workflows/privacy.yml/badge.svg)](https://github.com/LuminariSoftwares/code-guardian/actions/workflows/privacy.yml)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/LuminariSoftwares/badge.svg)](https://hub.xerj.org/contributors/LuminariSoftwares)
@@ -26,7 +28,7 @@ code-guardian scan /home/user/project              # the grade, every finding wi
 code-guardian plan /home/user/project --top 3      # the three fixes worth the most Overall points
 ```
 
-Success looks like a first line `code-guardian 0.7.0  scan of <name>`, then a `status: COMPLETE` line and four score
+Success looks like a first line `code-guardian 0.7.1  scan of <name>`, then a `status: COMPLETE` line and four score
 lines. On a one-file project it takes well under a second. To give the same tools to an AI client, add the MCP server
 (see [MCP server](#mcp-server) for Claude Desktop and other clients):
 
@@ -491,8 +493,9 @@ computed as usual. A Python or JavaScript project with a few build, docs or shel
 COMPLETE. A JavaScript / TypeScript repo with a `package.json` is COMPLETE with Works scored. `tests/test_coverage.py`
 pins both sides of the line.
 
-Binary files, symlinks and large non-source files (images, design files) are only ever secret-scanned; skipping them
-is listed in the notes but does not make a scan PARTIAL.
+Binary files, symlinks and files larger than 2 MB are skipped: they are not read at all, so nothing in them is
+scanned, secrets included. Each one is listed in the notes and counted under `files.skipped`. Skipping them does not
+make a scan PARTIAL, except for a Python file or manifest that is too large to analyse.
 
 ### JSON shape (`--json`, and the MCP `scan` tool)
 
@@ -843,7 +846,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: LuminariSoftwares/code-guardian@v0.7.0
+      - uses: LuminariSoftwares/code-guardian@v0.7.1
         with:
           path: .
           fail-on: FAIL        # or WARN
@@ -859,7 +862,7 @@ environment variables, never by text substitution.
 ```yaml
 repos:
   - repo: https://github.com/LuminariSoftwares/code-guardian
-    rev: v0.7.0
+    rev: v0.7.1
     hooks:
       - id: code-guardian
         # args: [--fail-on, WARN]
